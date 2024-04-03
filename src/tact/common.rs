@@ -23,7 +23,7 @@ macro_rules! impl_key {
 
             fn from_str(s: &str) -> Result<Self, Self::Err> {
                 if s.len() != 32 {
-                    return Err(format!("requires string length of 16, got {}", s.len()));
+                    return Err(format!("requires string length of 32, got {}", s.len()));
                 }
                 let mut key = [0; 16];
                 for i in 0..16 {
