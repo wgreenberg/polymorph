@@ -1,5 +1,6 @@
 use std::{collections::HashMap, io::SeekFrom, path::{Path, PathBuf}};
 
+use log::{debug, info};
 use deku::{DekuContainerRead, DekuError, DekuRead};
 use thiserror::Error;
 use tokio::{fs, io::{AsyncReadExt, AsyncSeekExt}};
@@ -22,6 +23,8 @@ pub enum Error {
     MissingCKey,
     #[error("Invalid Zlib")]
     ZlibError(DecompressError),
+    #[error("Couldn't find file id {0}")]
+    MissingFileId(u32),
 }
 
 pub struct Manifest {
@@ -75,6 +78,7 @@ impl Manifest {
 }
 
 type EKey = [u8; 16];
+type CKey = [u8; 16];
 
 fn hexstring(hex: &[u8]) -> String {
     let mut result = String::new();
@@ -84,13 +88,13 @@ fn hexstring(hex: &[u8]) -> String {
     result
 }
 
-fn hexunstring(s: &str) -> EKey {
-    let mut ekey: EKey = [0; 16];
+fn hexunstring(s: &str) -> [u8; 16] {
+    let mut key = [0; 16];
     for i in 0..16 {
         let hex = &s[i*2..i*2+2];
-        ekey[i] = u8::from_str_radix(hex, 16).unwrap();
+        key[i] = u8::from_str_radix(hex, 16).unwrap();
     }
-    ekey
+    key
 }
 
 pub struct CDNHost {
@@ -124,9 +128,9 @@ pub struct CDNCache {
 }
 
 impl CDNCache {
-    pub fn new(cache_path: &str) -> Self {
+    pub fn new<P: AsRef<Path>>(cache_path: P) -> Self {
         CDNCache {
-            cache_path: PathBuf::from(cache_path),
+            cache_path: cache_path.as_ref().to_path_buf(),
         }
     }
 
@@ -136,7 +140,7 @@ impl CDNCache {
         match fs::try_exists(&file_path).await {
             Ok(true) => Ok(fs::read(file_path).await?),
             _ => {
-                println!("fetching url {}", host.make_url(key, directory));
+                debug!("fetching url {}", host.make_url(key, directory));
                 let buf = reqwest::get(host.make_url(key, directory))
                     .await?
                     .bytes()
@@ -156,6 +160,7 @@ impl CDNCache {
             return Ok(fs::read(&filename).await?);
         }
 
+        info!("archive {:?} missing, fetching...", &filename);
         let buf = reqwest::get(host.make_url(&archive.key, "data"))
             .await?
             .bytes()
@@ -168,9 +173,11 @@ impl CDNCache {
         let mut filename = self.cache_path.join("data");
         filename.push(&archive.key);
         if let Ok(true) = fs::try_exists(&filename).await {
+            info!("found archive {:?}", &filename);
             return fetch_data_fragment(&filename, entry.offset_bytes as usize, entry.size_bytes as usize).await;
         }
 
+        info!("archive {:?} missing, fetching...", &filename);
         let buf = reqwest::get(host.make_url(&archive.key, "data"))
             .await?
             .bytes()
@@ -184,7 +191,7 @@ async fn fetch_data_fragment<P: AsRef<Path>>(path: P, offset: usize, size: usize
     let mut file = fs::File::open(path).await?;
     file.seek(SeekFrom::Start(offset as u64)).await?;
     let mut buf = vec![0; size];
-    file.read(&mut buf).await;
+    file.read(&mut buf).await?;
     Ok(buf)
 }
 
@@ -354,8 +361,8 @@ impl RootFile {
         Ok(out)
     }
 
-    pub fn get_ckey_for_file_id(&self, file_id: u32) -> Option<String> {
-        self.file_id_to_ckey.get(&file_id).map(|s| hexstring(&s.ckey))
+    pub fn get_ckey_for_file_id(&self, file_id: u32) -> Option<CKey> {
+        self.file_id_to_ckey.get(&file_id).map(|s| s.ckey)
     }
 }
 
@@ -453,8 +460,12 @@ fn parse_config(data: &str) -> HashMap<String, Vec<String>> {
 }
 
 impl CDNFetcher {
-    pub async fn init(cache_path: &str) -> Result<Self, Error> {
+    pub async fn init<P: AsRef<Path>>(cache_path: P) -> Result<Self, Error> {
+        info!("intializing cache at {:?}", cache_path.as_ref());
+
+        info!("fetching versions manifest");
         let versions = Manifest::fetch_manifest(PATCH_SERVER, PRODUCT, "versions").await?;
+        info!("fetching CDNs manifest");
         let cdns = Manifest::fetch_manifest(PATCH_SERVER, PRODUCT, "cdns").await?;
 
         let cache = CDNCache::new(cache_path);
@@ -470,23 +481,32 @@ impl CDNFetcher {
         let build_config_key = versions.get_field(version_row, "BuildConfig").unwrap();
         let cdn_config_key = versions.get_field(version_row, "CDNConfig").unwrap();
 
+        info!("fetching CDN config");
         let cdn_config = parse_config(&String::from_utf8(cache.fetch_data(&hosts[0], "config", cdn_config_key).await?).expect("invalid config"));
+        info!("fetching build config");
         let build_config = parse_config(&String::from_utf8(cache.fetch_data(&hosts[0], "config", build_config_key).await?).expect("invalid config"));
 
+        info!("fetching encoding file");
         let encoding_key = &build_config.get("encoding").unwrap()[1];
         let encoding = EncodingFile::parse(&cache.fetch_data(&hosts[0], "data", encoding_key).await?)?;
 
+        let archive_keys = cdn_config.get("archives").unwrap();
         let mut archive_index = Vec::new();
-        for archive_key in cdn_config.get("archives").unwrap() {
+        let mut i = 0;
+        for archive_key in archive_keys {
+            info!("[{}/{}] fetching archive {}...", i, archive_keys.len(), archive_key);
             let archive_data = cache.fetch_data(&hosts[0], "data", &format!("{}.index", archive_key)).await?;
             archive_index.push(ArchiveIndex::parse(archive_key, &archive_data)?);
+            i += 1;
         }
 
-        let root_ckey = hexunstring(&build_config.get("root").unwrap()[0]);
+        info!("fetching root file");
+        let root_ckey: CKey = hexunstring(&build_config.get("root").unwrap()[0]);
         let root_ekey = hexstring(&encoding.get_ekey_for_ckey(root_ckey).unwrap());
         let root_data = cache.fetch_data(&hosts[0], "data", &root_ekey).await?;
         let root = RootFile::parse(&root_data)?;
 
+        info!("done!");
         Ok(CDNFetcher {
             hosts,
             archive_index,
@@ -523,6 +543,12 @@ impl CDNFetcher {
         };
         let data = self.cache.fetch_archive_entry(&self.hosts[0], archive, entry).await?;
         Ok(Some(data))
+    }
+
+    pub async fn fetch_file_id(&self, file_id: u32) -> Result<Vec<u8>, Error> {
+        let ckey = self.root.get_ckey_for_file_id(file_id).ok_or(Error::MissingFileId(file_id))?;
+        let compressed_data = self.fetch_ckey_from_archive(ckey).await?.ok_or(Error::MissingCKey)?;
+        decode_blte(&compressed_data)
     }
 }
 
