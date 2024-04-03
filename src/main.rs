@@ -1,8 +1,11 @@
-use std::{io::Write, path::PathBuf};
+use std::path::PathBuf;
 
-use polymorph::{CDNFetcher, Error};
 use clap::{arg, Parser, Subcommand};
-use tokio::io::AsyncWriteExt;
+use polymorph::{cdn::CDNFetcher, error::Error};
+
+const PATCH_SERVER: &str = "http://us.patch.battle.net:1119";
+const PRODUCT: &str = "wow_classic";
+const REGION: &str = "us";
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -42,7 +45,7 @@ enum Commands {
 async fn main() -> Result<(), Error> {
     env_logger::init();
     let cli = Cli::parse();
-    let fetcher = CDNFetcher::init(cli.cache_path).await?;
+    let fetcher = CDNFetcher::init(cli.cache_path, PATCH_SERVER, PRODUCT, REGION).await?;
     match cli.command {
         Commands::Serve { port, no_fetch } => todo!(),
         Commands::GetId { file_id, out_path } => {
