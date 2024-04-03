@@ -1,16 +1,14 @@
 use crate::error::Error;
 
+#[derive(Clone)]
 pub struct Manifest {
     pub field_names: Vec<String>,
     pub rows: Vec<Vec<String>>,
 }
 
 impl Manifest {
-    pub async fn fetch_manifest(patch_server: &str, product: &str, path: &str) -> Result<Self, Error> {
-        let body = reqwest::get(format!("{patch_server}/{product}/{path}"))
-            .await?
-            .text()
-            .await?;
+    pub fn parse(data: &[u8]) -> Result<Self, Error> {
+        let body = std::str::from_utf8(data).unwrap();
         let mut lines = body.lines();
 
         let header = lines.next().unwrap();

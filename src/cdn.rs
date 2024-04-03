@@ -1,13 +1,15 @@
 use std::collections::HashMap;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::io::SeekFrom;
 
-use log::{debug, info};
+use log::{debug, error, info};
 use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 use crate::error::Error;
+use crate::file_db::FileDb;
 use crate::tact::archive::{ArchiveIndex, ArchiveIndexEntry};
 use crate::tact::btle::decode_blte;
 use crate::tact::common::{CKey, EKey};
@@ -15,6 +17,7 @@ use crate::tact::encoding::EncodingFile;
 use crate::tact::manifest::Manifest;
 use crate::tact::root::RootFile;
 
+#[derive(Clone)]
 pub struct CDNHost {
     pub host: String,
     pub path: String,
@@ -41,75 +44,88 @@ impl CDNHost {
     }
 }
 
-pub struct CDNCache {
-    pub cache_path: PathBuf,
+async fn read_or_cache<P: AsRef<Path>>(file_path: P, url: &str, maybe_range: Option<Range<usize>>) -> Result<Vec<u8>, Error> {
+    match fs::try_exists(&file_path).await {
+        Ok(true) => {
+            debug!("cache: found {:?}", file_path.as_ref());
+            if let Some(Range { start, end }) = maybe_range {
+                let mut file = fs::File::open(file_path).await?;
+                file.seek(SeekFrom::Start(start as u64)).await?;
+                let mut buf = vec![0; end - start];
+                file.read_exact(&mut buf).await?;
+                Ok(buf)
+            } else {
+                Ok(fs::read(file_path).await?)
+            }
+        },
+        _ => {
+            debug!("cache: didn't find {:?}, requesting {}", file_path.as_ref(), &url);
+            let buf = reqwest::get(url)
+                .await?
+                .bytes()
+                .await?;
+            fs::create_dir_all(file_path.as_ref().parent().unwrap())
+                .await?;
+            fs::write(file_path, &buf).await?;
+            if let Some(Range { start, end }) = maybe_range {
+                Ok(buf[start..end].to_vec())
+            } else {
+                Ok(buf.to_vec())
+            }
+        },
+    }
 }
 
-impl CDNCache {
-    pub fn new<P: AsRef<Path>>(cache_path: P) -> Self {
-        CDNCache {
+#[derive(Clone)]
+pub struct BlizzCache {
+    pub cache_path: PathBuf,
+    pub patch_server: String,
+    pub product: String,
+}
+
+impl BlizzCache {
+    pub fn new<P: AsRef<Path>>(cache_path: P, patch_server: &str, product: &str) -> Self {
+        BlizzCache {
             cache_path: cache_path.as_ref().to_path_buf(),
+            patch_server: patch_server.into(),
+            product: product.into(),
         }
     }
 
     pub async fn fetch_data(&self, host: &CDNHost, directory: &str, key: &str) -> Result<Vec<u8>, Error> {
         let mut file_path = self.cache_path.join(directory);
         file_path.push(key);
-        match fs::try_exists(&file_path).await {
-            Ok(true) => Ok(fs::read(file_path).await?),
-            _ => {
-                debug!("fetching url {}", host.make_url(key, directory));
-                let buf = reqwest::get(host.make_url(key, directory))
-                    .await?
-                    .bytes()
-                    .await?;
-                fs::create_dir_all(file_path.parent().unwrap())
-                    .await?;
-                fs::write(file_path, &buf).await?;
-                Ok(buf.to_vec())
-            },
-        }
+        read_or_cache(file_path, &host.make_url(key, directory), None).await
     }
 
     pub async fn fetch_archive(&self, host: &CDNHost, archive: &ArchiveIndex) -> Result<Vec<u8>, Error> {
         let mut filename = self.cache_path.join("data");
         filename.push(&archive.key);
-        if let Ok(true) = fs::try_exists(&filename).await {
-            return Ok(fs::read(&filename).await?);
-        }
-
-        info!("archive {:?} missing, fetching...", &filename);
-        let buf = reqwest::get(host.make_url(&archive.key, "data"))
-            .await?
-            .bytes()
-            .await?;
-        fs::write(&filename, &buf).await?;
-        Ok(buf.into())
+        read_or_cache(filename, &host.make_url(&archive.key, "data"), None).await
     }
 
     pub async fn fetch_archive_entry(&self, host: &CDNHost, archive: &ArchiveIndex, entry: &ArchiveIndexEntry) -> Result<Vec<u8>, Error> {
         let mut filename = self.cache_path.join("data");
         filename.push(&archive.key);
-        if let Ok(true) = fs::try_exists(&filename).await {
-            info!("found archive {:?}", &filename);
-            return fetch_data_fragment(&filename, entry.offset_bytes as usize, entry.size_bytes as usize).await;
-        }
-
-        info!("archive {:?} missing, fetching...", &filename);
-        let buf = reqwest::get(host.make_url(&archive.key, "data"))
-            .await?
-            .bytes()
-            .await?;
-        fs::write(&filename, &buf).await?;
-        Ok(buf[(entry.offset_bytes as usize)..(entry.offset_bytes as usize) + (entry.size_bytes as usize)].to_vec())
+        let range = entry.offset_bytes as usize..entry.offset_bytes as usize + entry.size_bytes as usize;
+        read_or_cache(filename, &host.make_url(&archive.key, "data"), Some(range)).await
+    }
+    
+    async fn fetch_manifest(&self, manifest_name: &str) -> Result<Vec<u8>, Error> {
+        let url = format!("{}/{}/{}", self.patch_server, self.product, manifest_name);
+        let mut filename = self.cache_path.join("patch_server");
+        filename.push(&self.product);
+        filename.push(&manifest_name);
+        read_or_cache(filename, &url, None).await
     }
 }
 
+#[derive(Clone)]
 pub struct CDNFetcher {
     pub hosts: Vec<CDNHost>,
     pub archive_index: Vec<ArchiveIndex>,
     pub root: RootFile,
-    pub cache: CDNCache,
+    pub cache: BlizzCache,
     pub encoding: EncodingFile,
     pub versions: Manifest,
     pub cdns: Manifest,
@@ -120,13 +136,12 @@ pub struct CDNFetcher {
 impl CDNFetcher {
     pub async fn init<P: AsRef<Path>>(cache_path: P, patch_server: &str, product: &str, region: &str) -> Result<Self, Error> {
         info!("intializing cache at {:?}", cache_path.as_ref());
+        let cache = BlizzCache::new(cache_path, patch_server, product);
 
-        info!("fetching versions manifest");
-        let versions = Manifest::fetch_manifest(patch_server, product, "versions").await?;
-        info!("fetching CDNs manifest");
-        let cdns = Manifest::fetch_manifest(patch_server, product, "cdns").await?;
-
-        let cache = CDNCache::new(cache_path);
+        info!("loading versions manifest");
+        let versions = Manifest::parse(&cache.fetch_manifest("versions").await?)?;
+        info!("loading CDNs manifest");
+        let cdns = Manifest::parse(&cache.fetch_manifest("cdns").await?)?;
 
         let cdn_row = cdns.find_row("Name", region).unwrap();
         let path = cdns.get_field(cdn_row, "Path").unwrap();
@@ -150,12 +165,10 @@ impl CDNFetcher {
 
         let archive_keys = cdn_config.get("archives").unwrap();
         let mut archive_index = Vec::new();
-        let mut i = 0;
-        for archive_key in archive_keys {
+        for (i, archive_key) in archive_keys.iter().enumerate() {
             info!("[{}/{}] fetching archive {}...", i, archive_keys.len(), archive_key);
             let archive_data = cache.fetch_data(&hosts[0], "data", &format!("{}.index", archive_key)).await?;
             archive_index.push(ArchiveIndex::parse(archive_key, &archive_data)?);
-            i += 1;
         }
 
         info!("fetching root file");
@@ -164,7 +177,6 @@ impl CDNFetcher {
         let root_data = cache.fetch_data(&hosts[0], "data", root_ekey).await?;
         let root = RootFile::parse(&root_data)?;
 
-        info!("done!");
         Ok(CDNFetcher {
             hosts,
             archive_index,
@@ -176,6 +188,23 @@ impl CDNFetcher {
             cdn_config,
             build_config,
         })
+    }
+
+    pub fn build_file_db(&self) -> FileDb {
+        let mut db = FileDb::new();
+        for (&file_id, &index) in self.root.file_id_to_entry_index.iter() {
+            let root_entry = &self.root.entries[index];
+            let Some(ekey) = self.encoding.get_ekey_for_ckey(&root_entry.ckey) else {
+                error!("couldn't find ekey for file id {}", file_id);
+                continue;
+            };
+            let Some((archive, archive_entry)) = self.find_archive_entry(ekey) else {
+                error!("couldn't find archive entry for file id {}", file_id);
+                continue;
+            };
+            db.append(file_id, root_entry.name_hash, &archive.key, archive_entry.offset_bytes, archive_entry.size_bytes);
+        }
+        db
     }
 
     pub fn find_archive_entry(&self, ekey: &EKey) -> Option<(&ArchiveIndex, &ArchiveIndexEntry)> {
@@ -208,6 +237,12 @@ impl CDNFetcher {
         let compressed_data = self.fetch_ckey_from_archive(ckey).await?.ok_or(Error::MissingCKey)?;
         decode_blte(&compressed_data)
     }
+
+    pub async fn fetch_file_name(&self, path: &str) -> Result<Vec<u8>, Error> {
+        let ckey = self.root.get_ckey_for_file_path(path).ok_or(Error::MissingFilePath(path.to_string()))?;
+        let compressed_data = self.fetch_ckey_from_archive(ckey).await?.ok_or(Error::MissingCKey)?;
+        decode_blte(&compressed_data)
+    }
 }
 
 fn parse_config(data: &str) -> HashMap<String, Vec<String>> {
@@ -221,12 +256,4 @@ fn parse_config(data: &str) -> HashMap<String, Vec<String>> {
         result.insert(k.to_string(), v.split(' ').map(|s| s.to_string()).collect());
     }
     result
-}
-
-async fn fetch_data_fragment<P: AsRef<Path>>(path: P, offset: usize, size: usize) -> Result<Vec<u8>, Error> {
-    let mut file = fs::File::open(path).await?;
-    file.seek(SeekFrom::Start(offset as u64)).await?;
-    let mut buf = vec![0; size];
-    file.read_exact(&mut buf).await?;
-    Ok(buf)
 }

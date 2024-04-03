@@ -16,4 +16,6 @@ pub enum Error {
     ZlibError(DecompressError),
     #[error("Couldn't find file id {0}")]
     MissingFileId(u32),
+    #[error("Couldn't find file with path {0}")]
+    MissingFilePath(String),
 }

@@ -5,7 +5,7 @@ use deku::{DekuRead, DekuContainerRead};
 use crate::error::Error;
 use crate::tact::{btle::decode_blte, common::{CKey, EKey}};
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct EncodingFile {
     pub ckey_to_ekey: HashMap<CKey, EKey>,
 }

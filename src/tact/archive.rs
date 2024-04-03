@@ -23,12 +23,13 @@ pub struct ArchiveIndexFooter {
     pub num_files: u32,
 }
 
+#[derive(Clone)]
 pub struct ArchiveIndex {
     entries: HashMap<EKey, ArchiveIndexEntry>,
     pub key: String,
 }
 
-#[derive(DekuRead)]
+#[derive(DekuRead, Clone)]
 pub struct ArchiveIndexEntry {
     pub ekey: EKey,
     #[deku(endian = "big")]
