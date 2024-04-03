@@ -160,7 +160,7 @@ impl CDNFetcher {
         info!("fetching root file");
         let root_ckey: CKey = CKey::from_str(&build_config.get("root").unwrap()[0]).unwrap();
         let root_ekey = &encoding.get_ekey_for_ckey(&root_ckey).unwrap().to_string();
-        let root_data = cache.fetch_data(&hosts[0], "data", &root_ekey).await?;
+        let root_data = cache.fetch_data(&hosts[0], "data", root_ekey).await?;
         let root = RootFile::parse(&root_data)?;
 
         info!("done!");
@@ -195,7 +195,7 @@ impl CDNFetcher {
         let Some(ekey) = self.encoding.get_ekey_for_ckey(ckey) else {
             return Ok(None);
         };
-        let Some((archive, entry)) = self.find_archive_entry(&ekey) else {
+        let Some((archive, entry)) = self.find_archive_entry(ekey) else {
             return Ok(None);
         };
         let data = self.cache.fetch_archive_entry(&self.hosts[0], archive, entry).await?;
@@ -204,7 +204,7 @@ impl CDNFetcher {
 
     pub async fn fetch_file_id(&self, file_id: u32) -> Result<Vec<u8>, Error> {
         let ckey = self.root.get_ckey_for_file_id(file_id).ok_or(Error::MissingFileId(file_id))?;
-        let compressed_data = self.fetch_ckey_from_archive(&ckey).await?.ok_or(Error::MissingCKey)?;
+        let compressed_data = self.fetch_ckey_from_archive(ckey).await?.ok_or(Error::MissingCKey)?;
         decode_blte(&compressed_data)
     }
 }

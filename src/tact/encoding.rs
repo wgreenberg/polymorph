@@ -71,7 +71,7 @@ impl EncodingFile {
     }
 
     pub fn get_ekey_for_ckey(&self, ckey: &CKey) -> Option<&EKey> {
-        self.ckey_to_ekey.get(&ckey)
+        self.ckey_to_ekey.get(ckey)
     }
 }
 

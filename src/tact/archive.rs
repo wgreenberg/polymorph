@@ -77,6 +77,6 @@ impl ArchiveIndex {
     }
 
     pub fn get_entry_for_ekey(&self, ekey: &EKey) -> Option<&ArchiveIndexEntry> {
-        self.entries.get(&ekey)
+        self.entries.get(ekey)
     }
 }
