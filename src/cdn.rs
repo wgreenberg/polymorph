@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::io::SeekFrom;
 
 use log::{debug, info};
 use tokio::fs;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 use crate::error::Error;
 use crate::tact::archive::{ArchiveIndex, ArchiveIndexEntry};
@@ -12,7 +14,6 @@ use crate::tact::common::{CKey, EKey};
 use crate::tact::encoding::EncodingFile;
 use crate::tact::manifest::Manifest;
 use crate::tact::root::RootFile;
-use crate::util::{fetch_data_fragment, parse_config};
 
 pub struct CDNHost {
     pub host: String,
@@ -207,4 +208,25 @@ impl CDNFetcher {
         let compressed_data = self.fetch_ckey_from_archive(ckey).await?.ok_or(Error::MissingCKey)?;
         decode_blte(&compressed_data)
     }
+}
+
+fn parse_config(data: &str) -> HashMap<String, Vec<String>> {
+    let mut result = HashMap::new();
+    for line in data.lines() {
+        if line.is_empty() || line.starts_with('#') {
+            continue
+        }
+
+        let (k, v) = line.split_once(" = ").expect("invalid line");
+        result.insert(k.to_string(), v.split(' ').map(|s| s.to_string()).collect());
+    }
+    result
+}
+
+async fn fetch_data_fragment<P: AsRef<Path>>(path: P, offset: usize, size: usize) -> Result<Vec<u8>, Error> {
+    let mut file = fs::File::open(path).await?;
+    file.seek(SeekFrom::Start(offset as u64)).await?;
+    let mut buf = vec![0; size];
+    file.read_exact(&mut buf).await?;
+    Ok(buf)
 }
