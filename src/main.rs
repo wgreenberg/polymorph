@@ -87,6 +87,15 @@ fn hexstring(hex: &[u8]) -> String {
     result
 }
 
+fn hexunstring(s: &str) -> EKey {
+    let mut ekey: EKey = [0; 16];
+    for i in 0..16 {
+        let hex = &s[i*2..i*2+2];
+        ekey[i] = u8::from_str_radix(&hex, 16).unwrap();
+    }
+    ekey
+}
+
 struct CDNHost {
     pub host: String,
     pub path: String,
@@ -130,6 +139,7 @@ impl CDNCache {
         match fs::try_exists(&file_path).await {
             Ok(true) => Ok(fs::read(file_path).await?),
             _ => {
+                println!("fetching url {}", host.make_url(key, directory));
                 let buf = reqwest::get(host.make_url(key, directory))
                     .await?
                     .bytes()
@@ -142,19 +152,34 @@ impl CDNCache {
         }
     }
 
-    pub async fn fetch_archive_entry(&self, host: &CDNHost, archive: &ArchiveIndex, entry: &ArchiveIndexEntry) -> Result<Vec<u8>, Error> {
-        let mut filename = self.cache_path.join("/data");
+    pub async fn fetch_archive(&self, host: &CDNHost, archive: &ArchiveIndex) -> Result<Vec<u8>, Error> {
+        let mut filename = self.cache_path.join("data");
         filename.push(&archive.key);
         if let Ok(true) = fs::try_exists(&filename).await {
-            return fetch_data_fragment(&filename, entry.offset_bytes, entry.size_bytes).await;
+            return Ok(fs::read(&filename).await?);
         }
 
-        let buf = reqwest::get(host.make_url(&archive.key, "/data"))
+        let buf = reqwest::get(host.make_url(&archive.key, "data"))
             .await?
             .bytes()
             .await?;
         fs::write(&filename, &buf).await?;
-        Ok(buf[entry.offset_bytes..entry.offset_bytes + entry.size_bytes].to_vec())
+        Ok(buf.into())
+    }
+
+    pub async fn fetch_archive_entry(&self, host: &CDNHost, archive: &ArchiveIndex, entry: &ArchiveIndexEntry) -> Result<Vec<u8>, Error> {
+        let mut filename = self.cache_path.join("data");
+        filename.push(&archive.key);
+        if let Ok(true) = fs::try_exists(&filename).await {
+            return fetch_data_fragment(&filename, entry.offset_bytes as usize, entry.size_bytes as usize).await;
+        }
+
+        let buf = reqwest::get(host.make_url(&archive.key, "data"))
+            .await?
+            .bytes()
+            .await?;
+        fs::write(&filename, &buf).await?;
+        Ok(buf[(entry.offset_bytes as usize)..(entry.offset_bytes as usize) + (entry.size_bytes as usize)].to_vec())
     }
 }
 
@@ -168,7 +193,7 @@ async fn fetch_data_fragment<P: AsRef<Path>>(path: P, offset: usize, size: usize
 
 #[derive(DekuRead, Debug)]
 struct ArchiveIndexFooter {
-    pub toc_hash: u16,
+    pub toc_hash: [u8; 0x10],
     #[deku(assert_eq = "1")]
     pub version: u8,
     #[deku(pad_bytes_before = "2", assert_eq = "4")]
@@ -181,22 +206,21 @@ struct ArchiveIndexFooter {
     pub key_size_in_bytes: u8,
     #[deku(assert_eq = "8")]
     pub checksum_size: u8,
-    pub num_blocks: u32,
+    pub num_files: u32,
+}
+
+struct ArchiveIndex {
+    entries: HashMap<EKey, ArchiveIndexEntry>,
+    key: String,
 }
 
 #[derive(DekuRead)]
 struct ArchiveIndexEntry {
     pub ekey: EKey,
     #[deku(endian = "big")]
-    pub size_bytes: usize,
-    #[deku(endian = "big", pad_bytes_after = "0x18")]
-    pub offset_bytes: usize,
-
-}
-
-struct ArchiveIndex {
-    entries: HashMap<EKey, ArchiveIndexEntry>,
-    key: String,
+    pub size_bytes: u32,
+    #[deku(endian = "big")]
+    pub offset_bytes: u32,
 }
 
 impl ArchiveIndex {
@@ -206,17 +230,29 @@ impl ArchiveIndex {
         let (_, footer): (_, ArchiveIndexFooter) = ArchiveIndexFooter::from_bytes((&data[footer_offset..], 0))?;
 
         let block_size = (footer.block_size_kb as usize) << 10;
-        for i in 0..footer.num_blocks as usize {
-            let block_start = i * block_size;
+        let mut num_files = 0;
+        let mut block_start = 0;
+        loop {
             let block_end = block_start + block_size;
             let mut block_data = &data[block_start..block_end];
-            while block_data.len() > block_size {
-                let ((new_block_data, _), entry) = ArchiveIndexEntry::from_bytes((&block_data[..], 0))?;
+            loop {
+                let Ok(((new_block_data, _), entry)) = ArchiveIndexEntry::from_bytes((&block_data[..], 0)) else {
+                    break;
+                };
+
                 block_data = new_block_data;
                 if &entry.ekey == &[0; 16] {
                     break;
                 }
+
                 entries.insert(entry.ekey, entry);
+                num_files += 1;
+            }
+
+            block_start += block_size;
+
+            if num_files >= footer.num_files {
+                break;
             }
         }
 
@@ -273,30 +309,124 @@ fn decode_blte(buf: &[u8]) -> Result<Vec<u8>, Error> {
     Ok(out)
 }
 
+#[derive(DekuRead, Clone)]
+#[deku(endian = "little")]
+struct RootFileEntry {
+    pub ckey: EKey,
+    pub name_hash: u64,
+}
+
 struct RootFile {
-    pub file_id_to_ckey: HashMap<u32, String>,
+    pub file_id_to_ckey: HashMap<u32, RootFileEntry>,
 }
 
 impl RootFile {
     pub fn parse(data: &[u8]) -> Result<Self, Error> {
-        todo!()
+        #[derive(DekuRead)]
+        struct Block {
+            #[deku(endian = "little")]
+            pub num_files: u32,
+            #[deku(endian = "little")]
+            pub content_flags: u32,
+            #[deku(endian = "little")]
+            pub locale_flags: u32,
+            #[deku(count = "num_files")]
+            pub file_id_delta_table: Vec<u32>,
+            #[deku(count = "num_files")]
+            pub file_entries: Vec<RootFileEntry>,
+        }
+
+        let decode = decode_blte(data)?;
+
+        let mut out = RootFile { file_id_to_ckey: HashMap::new() };
+        let mut rest = &decode[..];
+        loop {
+            let Ok(((new_rest, _), block)) = Block::from_bytes((&rest, 0)) else {
+                break;
+            };
+            rest = new_rest;
+
+            let mut file_id = 0;
+            for (file_id_delta, entry) in std::iter::zip(block.file_id_delta_table.iter(), block.file_entries.iter()) {
+                file_id += file_id_delta;
+                out.file_id_to_ckey.insert(file_id, entry.clone());
+                file_id += 1;
+            }
+        }
+
+        Ok(out)
     }
 
-    pub fn get_ckey_for_file_id(&self, file_id: u32) -> Option<&str> {
-        self.file_id_to_ckey.get(&file_id).map(|s| s.as_str())
+    pub fn get_ckey_for_file_id(&self, file_id: u32) -> Option<String> {
+        self.file_id_to_ckey.get(&file_id).map(|s| hexstring(&s.ckey))
     }
 }
 
+#[derive(Debug)]
 struct EncodingFile {
+    pub ckey_to_ekey: HashMap<EKey, EKey>,
 }
 
 impl EncodingFile {
     pub fn parse(data: &[u8]) -> Result<Self, Error> {
-        todo!()
+        #[derive(DekuRead, Debug)]
+        #[deku(magic = b"EN", endian = "big")]
+        struct Header {
+            pub version: u8,
+            pub hash_size_ckey: u8,
+            pub hash_size_ekey: u8,
+            pub page_size_ckey: u16,
+            pub page_size_ekey: u16,
+            pub page_count_ckey: u32,
+            pub page_count_ekey: u32,
+            #[deku(assert_eq = "0")]
+            _pad1: u8,
+            pub espec_page_size: u32,
+        }
+
+        let decode = decode_blte(&data)?;
+        let ((rest, _), header) = Header::from_bytes((&decode, 0))?;
+
+        let mut out = EncodingFile { ckey_to_ekey: HashMap::new() };
+        let page_start_ckey = header.espec_page_size + header.page_count_ckey * ((header.hash_size_ckey as u32) + 0x10);
+        let page_size_ckey = (header.page_size_ckey as u32) * 1024;
+
+        for i in 0..header.page_count_ckey {
+            let offs = (page_start_ckey + page_size_ckey * i) as usize;
+            let page_end = offs + (page_size_ckey as usize);
+
+            let mut page_rest = &rest[offs .. page_end];
+            loop {
+                #[derive(DekuRead, Debug)]
+                #[deku(endian = "big")]
+                struct Page {
+                    pub ekey_count: u8,
+                    #[deku(pad_bytes_before = "1")]
+                    pub size: u32, // Technically this is a 40-bit size value. We chop off the first byte here... hope it doesn't matter!
+                    pub ckey: EKey,
+                    #[deku(count = "ekey_count")]
+                    pub ekey: Vec<EKey>,
+                }
+
+                let Ok(((new_page_rest, _), page)) = Page::from_bytes((&page_rest, 0)) else {
+                    break;
+                };
+
+                page_rest = new_page_rest;
+
+                if (page.ekey_count == 0) {
+                    break;
+                }
+
+                out.ckey_to_ekey.insert(page.ckey, page.ekey[0]);
+            }
+        }
+
+        Ok(out)
     }
 
-    pub fn get_ekey_for_ckey(&self, ckey: &str) -> Option<EKey> {
-        todo!()
+    pub fn get_ekey_for_ckey(&self, ckey: EKey) -> Option<EKey> {
+        return self.ckey_to_ekey.get(&ckey).cloned();
     }
 }
 
@@ -343,21 +473,21 @@ impl CDNFetcher {
         let build_config_key = versions.get_field(version_row, "BuildConfig").unwrap();
         let cdn_config_key = versions.get_field(version_row, "CDNConfig").unwrap();
 
-        let cdn_config = parse_config(&String::from_utf8(cache.fetch_data(&hosts[0], "/config", cdn_config_key).await?).expect("invalid config"));
-        let build_config = parse_config(&String::from_utf8(cache.fetch_data(&hosts[0], "/config", build_config_key).await?).expect("invalid config"));
+        let cdn_config = parse_config(&String::from_utf8(cache.fetch_data(&hosts[0], "config", cdn_config_key).await?).expect("invalid config"));
+        let build_config = parse_config(&String::from_utf8(cache.fetch_data(&hosts[0], "config", build_config_key).await?).expect("invalid config"));
 
-        let encoding_key = &build_config.get("encoding").unwrap()[0];
-        let encoding = EncodingFile::parse(&cache.fetch_data(&hosts[0], "/data", encoding_key).await?)?;
+        let encoding_key = &build_config.get("encoding").unwrap()[1];
+        let encoding = EncodingFile::parse(&cache.fetch_data(&hosts[0], "data", encoding_key).await?)?;
 
         let mut archive_index = Vec::new();
         for archive_key in cdn_config.get("archives").unwrap() {
-            let archive_data = cache.fetch_data(&hosts[0], "/data", &format!("{}.index", archive_key)).await?;
+            let archive_data = cache.fetch_data(&hosts[0], "data", &format!("{}.index", archive_key)).await?;
             archive_index.push(ArchiveIndex::parse(&archive_key, &archive_data)?);
         }
 
-        let root_ckey = &build_config.get("root").unwrap()[0];
-        let root_ekey = hexstring(&encoding.get_ekey_for_ckey(&root_ckey).unwrap());
-        let root_data = cache.fetch_data(&hosts[0], "/data", &root_ekey).await?;
+        let root_ckey = hexunstring(&build_config.get("root").unwrap()[0]);
+        let root_ekey = hexstring(&encoding.get_ekey_for_ckey(root_ckey).unwrap());
+        let root_data = cache.fetch_data(&hosts[0], "data", &root_ekey).await?;
         let root = RootFile::parse(&root_data)?;
 
         Ok(CDNFetcher {
@@ -382,7 +512,12 @@ impl CDNFetcher {
         None
     }
 
-    pub async fn fetch_ckey_from_archive(&self, ckey: &str) -> Result<Option<Vec<u8>>, Error> {
+    pub async fn fetch_archive(&self, archive: &ArchiveIndex) -> Result<Vec<u8>, Error> {
+        let data = self.cache.fetch_archive(&self.hosts[0], archive).await?;
+        Ok(data)
+    }
+
+    pub async fn fetch_ckey_from_archive(&self, ckey: EKey) -> Result<Option<Vec<u8>>, Error> {
         let Some(ekey) = self.encoding.get_ekey_for_ckey(ckey) else {
             return Ok(None);
         };
@@ -396,6 +531,12 @@ impl CDNFetcher {
 
 #[tokio::main]
 async fn main() {
+    let cache_path = "./cache";
+    let fetcher = CDNFetcher::init(cache_path).await.unwrap();
+    for archive in &fetcher.archive_index {
+        println!("fetching archive {}", archive.key);
+        fetcher.fetch_archive(&archive).await;
+    }
 }
 
 #[cfg(test)]
@@ -411,10 +552,33 @@ mod tests {
     }
 
     #[test]
+    fn test_hexunstring() {
+        let s = "0017a402f556fbece46c38dc431a2c9b";
+        let hex: EKey = [0x00, 0x17, 0xa4, 0x02, 0xf5, 0x56, 0xfb, 0xec, 0xe4, 0x6c, 0x38, 0xdc, 0x43, 0x1a, 0x2c, 0x9b];
+        assert_eq!(hexunstring(s), hex);
+    }
+
+    #[test]
     fn test_blte_decode() {
         let test_file = std::fs::read("./test/test1.blte.out").unwrap();
 
         let buf = decode_blte(&test_file).unwrap();
         dbg!(buf);
+    }
+
+    #[test]
+    fn test_encoding_file() {
+        let test_file = std::fs::read("./test/encoding.out").unwrap();
+
+        let file = EncodingFile::parse(&test_file).unwrap();
+        dbg!(file);
+    }
+
+    #[test]
+    fn test_root_file() {
+        let test_file = std::fs::read("./test/root.out").unwrap();
+
+        let file = RootFile::parse(&test_file).unwrap();
+        dbg!(file.file_id_to_ckey.len());
     }
 }
