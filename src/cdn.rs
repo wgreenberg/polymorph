@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use log::{debug, info};
 use tokio::fs;
@@ -8,7 +9,7 @@ use crate::error::Error;
 use crate::parse_config;
 use crate::tact::archive::{ArchiveIndex, ArchiveIndexEntry};
 use crate::tact::btle::decode_blte;
-use crate::tact::common::{hexstring, hexunstring, CKey, EKey};
+use crate::tact::common::{CKey, EKey};
 use crate::tact::encoding::EncodingFile;
 use crate::tact::manifest::Manifest;
 use crate::tact::root::RootFile;
@@ -158,8 +159,8 @@ impl CDNFetcher {
         }
 
         info!("fetching root file");
-        let root_ckey: CKey = hexunstring(&build_config.get("root").unwrap()[0]);
-        let root_ekey = hexstring(&encoding.get_ekey_for_ckey(root_ckey).unwrap());
+        let root_ckey: CKey = CKey::from_str(&build_config.get("root").unwrap()[0]).unwrap();
+        let root_ekey = &encoding.get_ekey_for_ckey(&root_ckey).unwrap().to_string();
         let root_data = cache.fetch_data(&hosts[0], "data", &root_ekey).await?;
         let root = RootFile::parse(&root_data)?;
 
@@ -177,7 +178,7 @@ impl CDNFetcher {
         })
     }
 
-    pub fn find_archive_entry(&self, ekey: EKey) -> Option<(&ArchiveIndex, &ArchiveIndexEntry)> {
+    pub fn find_archive_entry(&self, ekey: &EKey) -> Option<(&ArchiveIndex, &ArchiveIndexEntry)> {
         for index in &self.archive_index {
             if let Some(entry) = index.get_entry_for_ekey(ekey) {
                 return Some((index, entry));
@@ -191,11 +192,11 @@ impl CDNFetcher {
         Ok(data)
     }
 
-    pub async fn fetch_ckey_from_archive(&self, ckey: CKey) -> Result<Option<Vec<u8>>, Error> {
+    pub async fn fetch_ckey_from_archive(&self, ckey: &CKey) -> Result<Option<Vec<u8>>, Error> {
         let Some(ekey) = self.encoding.get_ekey_for_ckey(ckey) else {
             return Ok(None);
         };
-        let Some((archive, entry)) = self.find_archive_entry(ekey) else {
+        let Some((archive, entry)) = self.find_archive_entry(&ekey) else {
             return Ok(None);
         };
         let data = self.cache.fetch_archive_entry(&self.hosts[0], archive, entry).await?;
@@ -204,7 +205,7 @@ impl CDNFetcher {
 
     pub async fn fetch_file_id(&self, file_id: u32) -> Result<Vec<u8>, Error> {
         let ckey = self.root.get_ckey_for_file_id(file_id).ok_or(Error::MissingFileId(file_id))?;
-        let compressed_data = self.fetch_ckey_from_archive(ckey).await?.ok_or(Error::MissingCKey)?;
+        let compressed_data = self.fetch_ckey_from_archive(&ckey).await?.ok_or(Error::MissingCKey)?;
         decode_blte(&compressed_data)
     }
 }

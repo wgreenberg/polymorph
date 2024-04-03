@@ -20,19 +20,16 @@ fn parse_config(data: &str) -> HashMap<String, Vec<String>> {
 
 #[cfg(test)]
 mod tests {
-    use crate::tact::{btle::decode_blte, common::{hexstring, hexunstring, EKey}, encoding::EncodingFile, root::RootFile};
+    use std::str::FromStr;
+
+    use crate::tact::{btle::decode_blte, common::EKey, encoding::EncodingFile, root::RootFile};
 
     #[test]
-    fn test_hexstring() {
-        let hex: [u8; 4] = [0x13, 0x12, 0xde, 0xad];
-        assert_eq!(hexstring(&hex), "1312dead");
-    }
-
-    #[test]
-    fn test_hexunstring() {
+    fn test_ekey_conversion() {
         let s = "0017a402f556fbece46c38dc431a2c9b";
-        let hex: EKey = [0x00, 0x17, 0xa4, 0x02, 0xf5, 0x56, 0xfb, 0xec, 0xe4, 0x6c, 0x38, 0xdc, 0x43, 0x1a, 0x2c, 0x9b];
-        assert_eq!(hexunstring(s), hex);
+        let key: EKey = EKey([0x00, 0x17, 0xa4, 0x02, 0xf5, 0x56, 0xfb, 0xec, 0xe4, 0x6c, 0x38, 0xdc, 0x43, 0x1a, 0x2c, 0x9b]);
+        assert_eq!(EKey::from_str(s), Ok(key.clone()));
+        assert_eq!(key.to_string(), s.to_string());
     }
 
     #[test]
@@ -56,6 +53,6 @@ mod tests {
         let test_file = std::fs::read("./test/root.out").unwrap();
 
         let file = RootFile::parse(&test_file).unwrap();
-        dbg!(file.file_id_to_ckey.len());
+        dbg!(file.file_id_to_entry.len());
     }
 }

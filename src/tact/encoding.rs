@@ -11,14 +11,13 @@ pub struct EncodingFile {
 }
 
 #[derive(DekuRead, Debug)]
-#[deku(endian = "big")]
 struct EncodingFilePage {
     pub ekey_count: u8,
-    #[deku(pad_bytes_before = "1")]
+    #[deku(pad_bytes_before = "1", endian = "big")]
     pub size: u32, // Technically this is a 40-bit size value. We chop off the first byte here... hope it doesn't matter!
-    pub ckey: EKey,
+    pub ckey: CKey,
     #[deku(count = "ekey_count")]
-    pub ekey: Vec<EKey>,
+    pub ekeys: Vec<EKey>,
 }
 
 #[derive(DekuRead, Debug)]
@@ -41,7 +40,7 @@ impl EncodingFile {
         let decode = decode_blte(data)?;
         let ((rest, _), header) = EncodingFileHeader::from_bytes((&decode, 0))?;
 
-        let mut out = EncodingFile { ckey_to_ekey: HashMap::new() };
+        let mut ckey_to_ekey = HashMap::new();
         let page_start_ckey = header.espec_page_size + header.page_count_ckey * ((header.hash_size_ckey as u32) + 0x10);
         let page_size_ckey = (header.page_size_ckey as u32) * 1024;
 
@@ -62,14 +61,16 @@ impl EncodingFile {
                     break;
                 }
 
-                out.ckey_to_ekey.insert(page.ckey, page.ekey[0]);
+                ckey_to_ekey.insert(page.ckey, page.ekeys[0].clone());
             }
         }
 
-        Ok(out)
+        Ok(EncodingFile {
+            ckey_to_ekey,
+        })
     }
 
-    pub fn get_ekey_for_ckey(&self, ckey: EKey) -> Option<EKey> {
-        return self.ckey_to_ekey.get(&ckey).cloned();
+    pub fn get_ekey_for_ckey(&self, ckey: &CKey) -> Option<&EKey> {
+        self.ckey_to_ekey.get(&ckey)
     }
 }

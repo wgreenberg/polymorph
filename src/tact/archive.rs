@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use deku::{DekuRead, DekuContainerRead};
 
 use crate::{error::Error, tact::common::EKey};
+use crate::tact::common::NULL_EKEY;
 
 #[derive(DekuRead, Debug)]
 pub struct ArchiveIndexFooter {
@@ -54,11 +55,11 @@ impl ArchiveIndex {
                 };
 
                 block_data = new_block_data;
-                if entry.ekey == [0; 16] {
+                if entry.ekey == NULL_EKEY {
                     break;
                 }
 
-                entries.insert(entry.ekey, entry);
+                entries.insert(entry.ekey.clone(), entry);
                 num_files += 1;
             }
 
@@ -75,7 +76,7 @@ impl ArchiveIndex {
         })
     }
 
-    pub fn get_entry_for_ekey(&self, ekey: EKey) -> Option<&ArchiveIndexEntry> {
+    pub fn get_entry_for_ekey(&self, ekey: &EKey) -> Option<&ArchiveIndexEntry> {
         self.entries.get(&ekey)
     }
 }
