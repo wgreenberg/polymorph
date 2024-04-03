@@ -7,6 +7,7 @@ edition = "2021"
 
 [dependencies]
 deku = "0.16.0"
+miniz_oxide = "0.7.2"
 reqwest = "0.12.2"
 thiserror = "1.0.58"
 tokio = { version = "1.37.0", features = ["full"] }

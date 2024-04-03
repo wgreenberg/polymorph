@@ -677,6 +677,7 @@ name = "polymorph"
 version = "0.1.0"
 dependencies = [
  "deku",
+ "miniz_oxide",
  "reqwest",
  "thiserror",
  "tokio",
