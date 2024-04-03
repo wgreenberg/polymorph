@@ -6,14 +6,13 @@ use log::{debug, info};
 use tokio::fs;
 
 use crate::error::Error;
-use crate::parse_config;
 use crate::tact::archive::{ArchiveIndex, ArchiveIndexEntry};
 use crate::tact::btle::decode_blte;
 use crate::tact::common::{CKey, EKey};
 use crate::tact::encoding::EncodingFile;
 use crate::tact::manifest::Manifest;
 use crate::tact::root::RootFile;
-use crate::util::fetch_data_fragment;
+use crate::util::{fetch_data_fragment, parse_config};
 
 pub struct CDNHost {
     pub host: String,

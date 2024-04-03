@@ -40,3 +40,16 @@ impl_key!(CKey);
 impl_key!(EKey);
 
 pub const NULL_EKEY: EKey = EKey([0; 16]);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ekey_conversion() {
+        let s = "0017a402f556fbece46c38dc431a2c9b";
+        let key: EKey = EKey([0x00, 0x17, 0xa4, 0x02, 0xf5, 0x56, 0xfb, 0xec, 0xe4, 0x6c, 0x38, 0xdc, 0x43, 0x1a, 0x2c, 0x9b]);
+        assert_eq!(EKey::from_str(s), Ok(key.clone()));
+        assert_eq!(key.to_string(), s.to_string());
+    }
+}

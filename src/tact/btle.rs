@@ -44,3 +44,16 @@ pub fn decode_blte(buf: &[u8]) -> Result<Vec<u8>, Error> {
 
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_blte_decode() {
+        let test_file = std::fs::read("./test/test1.blte.out").unwrap();
+
+        let buf = decode_blte(&test_file).unwrap();
+        dbg!(buf);
+    }
+}

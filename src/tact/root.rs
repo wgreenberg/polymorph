@@ -61,3 +61,17 @@ impl RootFile {
         self.file_id_to_entry.get(&file_id).map(|s| &s.ckey)
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_root_file() {
+        let test_file = std::fs::read("./test/root.out").unwrap();
+
+        let file = RootFile::parse(&test_file).unwrap();
+        dbg!(file.file_id_to_entry.len());
+    }
+}

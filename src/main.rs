@@ -47,13 +47,13 @@ async fn main() -> Result<(), Error> {
     let cli = Cli::parse();
     let fetcher = CDNFetcher::init(cli.cache_path, PATCH_SERVER, PRODUCT, REGION).await?;
     match cli.command {
-        Commands::Serve { port, no_fetch } => todo!(),
+        Commands::Serve { .. } => todo!(),
         Commands::GetId { file_id, out_path } => {
             let data = fetcher.fetch_file_id(file_id).await?;
             tokio::fs::write(out_path, &data).await?;
             Ok(())
         },
-        Commands::GetName { name, out_path } => todo!(),
+        Commands::GetName { .. } => todo!(),
         Commands::Init => {
             let num_archives = fetcher.archive_index.len();
             let mut i = 0;

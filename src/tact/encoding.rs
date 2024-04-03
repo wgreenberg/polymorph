@@ -74,3 +74,17 @@ impl EncodingFile {
         self.ckey_to_ekey.get(&ckey)
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_encoding_file() {
+        let test_file = std::fs::read("./test/encoding.out").unwrap();
+
+        let file = EncodingFile::parse(&test_file).unwrap();
+        dbg!(file);
+    }
+}
