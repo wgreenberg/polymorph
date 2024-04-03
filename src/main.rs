@@ -49,7 +49,7 @@ impl Manifest {
 
         let mut rows = Vec::new();
         for line in lines {
-            if line.len() == 0 || line.starts_with('#') {
+            if line.is_empty() || line.starts_with('#') {
                 continue;
             }
             rows.push(line.split('|').map(|s| s.to_string()).collect());
@@ -91,7 +91,7 @@ fn hexunstring(s: &str) -> EKey {
     let mut ekey: EKey = [0; 16];
     for i in 0..16 {
         let hex = &s[i*2..i*2+2];
-        ekey[i] = u8::from_str_radix(&hex, 16).unwrap();
+        ekey[i] = u8::from_str_radix(hex, 16).unwrap();
     }
     ekey
 }
@@ -186,7 +186,7 @@ impl CDNCache {
 async fn fetch_data_fragment<P: AsRef<Path>>(path: P, offset: usize, size: usize) -> Result<Vec<u8>, Error> {
     let mut file = fs::File::open(path).await?;
     file.seek(SeekFrom::Start(offset as u64)).await?;
-    let mut buf = Vec::with_capacity(size);
+    let mut buf = vec![0; size];
     file.read(&mut buf).await;
     Ok(buf)
 }
@@ -236,12 +236,12 @@ impl ArchiveIndex {
             let block_end = block_start + block_size;
             let mut block_data = &data[block_start..block_end];
             loop {
-                let Ok(((new_block_data, _), entry)) = ArchiveIndexEntry::from_bytes((&block_data[..], 0)) else {
+                let Ok(((new_block_data, _), entry)) = ArchiveIndexEntry::from_bytes((block_data, 0)) else {
                     break;
                 };
 
                 block_data = new_block_data;
-                if &entry.ekey == &[0; 16] {
+                if entry.ekey == [0; 16] {
                     break;
                 }
 
@@ -341,7 +341,7 @@ impl RootFile {
         let mut out = RootFile { file_id_to_ckey: HashMap::new() };
         let mut rest = &decode[..];
         loop {
-            let Ok(((new_rest, _), block)) = Block::from_bytes((&rest, 0)) else {
+            let Ok(((new_rest, _), block)) = Block::from_bytes((rest, 0)) else {
                 break;
             };
             rest = new_rest;
@@ -384,7 +384,7 @@ impl EncodingFile {
             pub espec_page_size: u32,
         }
 
-        let decode = decode_blte(&data)?;
+        let decode = decode_blte(data)?;
         let ((rest, _), header) = Header::from_bytes((&decode, 0))?;
 
         let mut out = EncodingFile { ckey_to_ekey: HashMap::new() };
@@ -408,7 +408,7 @@ impl EncodingFile {
                     pub ekey: Vec<EKey>,
                 }
 
-                let Ok(((new_page_rest, _), page)) = Page::from_bytes((&page_rest, 0)) else {
+                let Ok(((new_page_rest, _), page)) = Page::from_bytes((page_rest, 0)) else {
                     break;
                 };
 
@@ -445,7 +445,7 @@ struct CDNFetcher {
 fn parse_config(data: &str) -> HashMap<String, Vec<String>> {
     let mut result = HashMap::new();
     for line in data.lines() {
-        if line.is_empty() || line.starts_with("#") {
+        if line.is_empty() || line.starts_with('#') {
             continue
         }
 
@@ -482,7 +482,7 @@ impl CDNFetcher {
         let mut archive_index = Vec::new();
         for archive_key in cdn_config.get("archives").unwrap() {
             let archive_data = cache.fetch_data(&hosts[0], "data", &format!("{}.index", archive_key)).await?;
-            archive_index.push(ArchiveIndex::parse(&archive_key, &archive_data)?);
+            archive_index.push(ArchiveIndex::parse(archive_key, &archive_data)?);
         }
 
         let root_ckey = hexunstring(&build_config.get("root").unwrap()[0]);
@@ -535,7 +535,7 @@ async fn main() {
     let fetcher = CDNFetcher::init(cache_path).await.unwrap();
     for archive in &fetcher.archive_index {
         println!("fetching archive {}", archive.key);
-        fetcher.fetch_archive(&archive).await;
+        fetcher.fetch_archive(archive).await;
     }
 }
 
