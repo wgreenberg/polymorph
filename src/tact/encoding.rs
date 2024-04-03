@@ -14,7 +14,7 @@ pub struct EncodingFile {
 struct EncodingFilePage {
     pub ekey_count: u8,
     #[deku(pad_bytes_before = "1", endian = "big")]
-    pub size: u32, // Technically this is a 40-bit size value. We chop off the first byte here... hope it doesn't matter!
+    pub _size: u32, // Technically this is a 40-bit size value. We chop off the first byte here... hope it doesn't matter!
     pub ckey: CKey,
     #[deku(count = "ekey_count")]
     pub ekeys: Vec<EKey>,
@@ -23,13 +23,13 @@ struct EncodingFilePage {
 #[derive(DekuRead, Debug)]
 #[deku(magic = b"EN", endian = "big")]
 struct EncodingFileHeader {
-    pub version: u8,
+    pub _version: u8,
     pub hash_size_ckey: u8,
-    pub hash_size_ekey: u8,
+    pub _hash_size_ekey: u8,
     pub page_size_ckey: u16,
-    pub page_size_ekey: u16,
+    pub _page_size_ekey: u16,
     pub page_count_ckey: u32,
-    pub page_count_ekey: u32,
+    pub _page_count_ekey: u32,
     #[deku(assert_eq = "0")]
     _pad1: u8,
     pub espec_page_size: u32,

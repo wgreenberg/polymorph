@@ -20,15 +20,15 @@ pub struct RootFile {
 #[derive(DekuRead)]
 struct RootBlock {
     #[deku(endian = "little")]
-    pub num_files: u32,
+    _num_files: u32,
     #[deku(endian = "little")]
-    pub content_flags: u32,
+    _content_flags: u32,
     #[deku(endian = "little")]
-    pub locale_flags: u32,
-    #[deku(count = "num_files")]
-    pub file_id_delta_table: Vec<u32>,
-    #[deku(count = "num_files")]
-    pub file_entries: Vec<RootFileEntry>,
+    _locale_flags: u32,
+    #[deku(count = "_num_files")]
+    file_id_delta_table: Vec<u32>,
+    #[deku(count = "_num_files")]
+    file_entries: Vec<RootFileEntry>,
 }
 
 impl RootFile {
