@@ -11,7 +11,7 @@ use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 use crate::error::Error;
-use crate::sheepfile_writer::SheepfileWriter;
+use crate::sheepfile::writer::SheepfileWriter;
 use crate::tact::archive::{ArchiveIndex, ArchiveIndexEntry};
 use crate::tact::blte::decode_blte;
 use crate::tact::common::{CKey, EKey};

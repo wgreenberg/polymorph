@@ -1,4 +1,11 @@
+
 use deku::{DekuContainerWrite, DekuRead, DekuUpdate, DekuWrite};
+
+#[cfg(feature = "sheepfile-reader")]
+pub mod reader;
+
+#[cfg(feature = "sheepfile-writer")]
+pub mod writer;
 
 pub const INDEX_FILENAME: &str = "index.shp";
 

@@ -4,7 +4,3 @@ pub mod tact;
 #[cfg(feature = "cdn")]
 pub mod cdn;
 pub mod sheepfile;
-#[cfg(feature = "sheepfile-reader")]
-pub mod sheepfile_reader;
-#[cfg(feature = "sheepfile-writer")]
-pub mod sheepfile_writer;

@@ -1,7 +1,7 @@
 use std::{io::SeekFrom, path::PathBuf};
 
 use clap::{arg, Parser, Subcommand};
-use polymorph::{cdn::CDNFetcher, error::Error, sheepfile::{get_data_filename, Entry, INDEX_FILENAME}, sheepfile_reader::SheepfileReader};
+use polymorph::{cdn::CDNFetcher, error::Error, sheepfile::{get_data_filename, Entry, INDEX_FILENAME}, sheepfile::reader::SheepfileReader};
 use axum::{extract::{Path, State}, http::StatusCode, routing::get, Router};
 use tokio::{fs, io::{AsyncReadExt, AsyncSeekExt}};
 

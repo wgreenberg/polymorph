@@ -1,8 +1,7 @@
+use std::{os::windows::fs::MetadataExt, path::{Path, PathBuf}};
 
-use std::{collections::HashMap, io::SeekFrom, os::windows::fs::MetadataExt, path::{Path, PathBuf}};
-
-use deku::{DekuContainerRead, DekuContainerWrite, DekuRead, DekuUpdate, DekuWrite};
-use tokio::{fs::{self, File}, io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt}};
+use deku::DekuContainerWrite;
+use tokio::{fs::{self, File}, io::AsyncWriteExt};
 
 use crate::{error::Error, sheepfile::{get_data_filename, Entry, Index, INDEX_FILENAME}};
 
