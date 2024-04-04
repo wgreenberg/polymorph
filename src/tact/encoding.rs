@@ -2,8 +2,9 @@ use std::collections::HashMap;
 
 use deku::{DekuRead, DekuContainerRead};
 
+use crate::tact::blte::decode_blte;
 use crate::error::Error;
-use crate::tact::{blte::decode_blte, common::{CKey, EKey}};
+use crate::tact::common::{CKey, EKey};
 
 #[derive(Clone, Debug)]
 pub struct EncodingFile {

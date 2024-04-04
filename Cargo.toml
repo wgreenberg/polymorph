@@ -3,6 +3,13 @@ name = "polymorph"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["sheepfile-reader", "sheepfile-writer", "tact", "cdn"]
+sheepfile-reader = []
+sheepfile-writer = []
+tact = []
+cdn = ["tact", "sheepfile-reader"]
+
 [lib]
 name = "polymorph"
 path = "src/lib.rs"

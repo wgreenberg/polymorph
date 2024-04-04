@@ -1,10 +1,9 @@
-use std::{collections::HashSet, path::PathBuf, sync::{atomic::{AtomicUsize, Ordering}, Arc}};
+use std::{io::SeekFrom, path::PathBuf};
 
 use clap::{arg, Parser, Subcommand};
-use log::{error, info};
-use polymorph::{cdn::CDNFetcher, error::Error, sheepfile::SheepfileReader};
+use polymorph::{cdn::CDNFetcher, error::Error, sheepfile::{get_data_filename, Entry, INDEX_FILENAME}, sheepfile_reader::SheepfileReader};
 use axum::{extract::{Path, State}, http::StatusCode, routing::get, Router};
-use tokio::{fs, sync::Mutex, task::JoinSet};
+use tokio::{fs, io::{AsyncReadExt, AsyncSeekExt}};
 
 const PATCH_SERVER: &str = "http://us.patch.battle.net:1119";
 const PRODUCT: &str = "wow_classic";
@@ -62,6 +61,20 @@ async fn get_file_name(state: State<ServerState>, Path(file_name): Path<String>)
     todo!()
 }
 
+async fn get_entry_data<P: AsRef<std::path::Path>>(path: P, entry: &Entry) -> Result<Vec<u8>, Error> {
+    let file_path = path.as_ref().join(get_data_filename(entry.data_file_index as usize));
+    let mut file = fs::File::open(file_path).await?;
+    file.seek(SeekFrom::Start(entry.start_bytes as u64)).await?;
+    let mut buf = vec![0; entry.size_bytes as usize];
+    file.read_exact(&mut buf).await?;
+    return Ok(buf)
+}
+
+async fn new_sheepfile<P: AsRef<std::path::Path>>(path: P) -> Result<SheepfileReader, Error> {
+    SheepfileReader::parse(&fs::read(path.as_ref().join(INDEX_FILENAME)).await?)
+}
+
+
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     env_logger::init();
@@ -75,21 +88,21 @@ async fn main() -> Result<(), Error> {
             // axum::serve(listener, app).await.unwrap()
         },
         Commands::GetId { file_id, out_path } => {
-            let sheepfile = SheepfileReader::new(&cli.sheepfile_path).await?;
+            let sheepfile = new_sheepfile(&cli.sheepfile_path).await?;
             let entry = sheepfile.get_entry_for_file_id(file_id)
                 .ok_or(Error::MissingFileId(file_id))?;
-            let data = sheepfile.get_entry_data(&cli.sheepfile_path, entry).await?;
+            let data = get_entry_data(&cli.sheepfile_path, entry).await?;
             fs::write(out_path, &data).await?;
         },
         Commands::GetName { name, out_path } => {
-            let sheepfile = SheepfileReader::new(&cli.sheepfile_path).await?;
+            let sheepfile = new_sheepfile(&cli.sheepfile_path).await?;
             let entry = sheepfile.get_entry_for_name(&name)
                 .ok_or(Error::MissingFileName(name))?;
-            let data = sheepfile.get_entry_data(&cli.sheepfile_path, entry).await?;
+            let data = get_entry_data(&cli.sheepfile_path, entry).await?;
             fs::write(out_path, &data).await?;
         },
         Commands::List => {
-            let sheepfile = SheepfileReader::new(cli.sheepfile_path).await?;
+            let sheepfile = new_sheepfile(cli.sheepfile_path).await?;
             for (i, entry) in sheepfile.entries.iter().enumerate() {
                 println!("{} - FileID {}, Size {} bytes", i+1, entry.file_id, entry.size_bytes);
             }

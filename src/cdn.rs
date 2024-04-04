@@ -11,8 +11,7 @@ use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 use crate::error::Error;
-use crate::file_db::FileDb;
-use crate::sheepfile::SheepfileWriter;
+use crate::sheepfile_writer::SheepfileWriter;
 use crate::tact::archive::{ArchiveIndex, ArchiveIndexEntry};
 use crate::tact::blte::decode_blte;
 use crate::tact::common::{CKey, EKey};
@@ -231,23 +230,6 @@ impl CDNFetcher {
             cdn_config,
             build_config,
         })
-    }
-
-    pub fn build_file_db(&self) -> FileDb {
-        let mut db = FileDb::new();
-        for (&file_id, &index) in self.root.file_id_to_entry_index.iter() {
-            let root_entry = &self.root.entries[index];
-            let Some(ekey) = self.encoding.get_ekey_for_ckey(&root_entry.ckey) else {
-                error!("couldn't find ekey for file id {}", file_id);
-                continue;
-            };
-            let Some((archive, archive_entry)) = self.find_archive_entry(ekey) else {
-                error!("couldn't find archive entry for file id {}", file_id);
-                continue;
-            };
-            db.append(file_id, root_entry.name_hash, &archive.key, archive_entry.offset_bytes, archive_entry.size_bytes);
-        }
-        db
     }
 
     pub async fn save_sheepfile<P: AsRef<Path>>(&self, path: P) -> Result<(), Error> {

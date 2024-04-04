@@ -1,5 +1,10 @@
-pub mod tact;
 pub mod error;
+#[cfg(feature = "tact")]
+pub mod tact;
+#[cfg(feature = "cdn")]
 pub mod cdn;
-pub mod file_db;
 pub mod sheepfile;
+#[cfg(feature = "sheepfile-reader")]
+pub mod sheepfile_reader;
+#[cfg(feature = "sheepfile-writer")]
+pub mod sheepfile_writer;
