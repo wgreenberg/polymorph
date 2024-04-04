@@ -1,9 +1,10 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::{atomic::{AtomicUsize, Ordering}, Arc}};
 
 use clap::{arg, Parser, Subcommand};
 use log::{error, info};
 use polymorph::{cdn::CDNFetcher, error::Error};
 use axum::{extract::{Path, State}, http::StatusCode, routing::get, Router};
+use tokio::{sync::Mutex, task::JoinSet};
 
 const PATCH_SERVER: &str = "http://us.patch.battle.net:1119";
 const PRODUCT: &str = "wow_classic";
@@ -85,26 +86,29 @@ async fn main() -> Result<(), Error> {
             tokio::fs::write(out_path, &data).await?;
         },
         Commands::Init => {
-            let arc_fetcher = std::sync::Arc::new(fetcher);
-            let mut set = tokio::task::JoinSet::new();
-            let indices = arc_fetcher.archive_index.clone();
-            let num_archives = indices.len();
-            info!("fetching {} archives...", num_archives);
-            for archive in indices {
+            let arc_fetcher = Arc::new(fetcher);
+            let n_archives = arc_fetcher.archive_index.len();
+            info!("fetching {} archives...", n_archives);
+            let n_complete = Arc::new(AtomicUsize::new(0));
+            let mut set = JoinSet::new();
+            let mut archives = arc_fetcher.archive_index.clone();
+            for _ in 0..10 {
                 let fetcher_clone = arc_fetcher.clone();
-                let archive_clone = archive.clone();
+                let archives_batch = archives.split_off((n_archives / 10).min(archives.len()));
+                let n_complete_clone = n_complete.clone();
                 set.spawn(async move {
-                    fetcher_clone.fetch_archive(&archive_clone).await
+                    for archive in archives_batch {
+                        let res = fetcher_clone.fetch_archive(&archive).await;
+                        let n = n_complete_clone.fetch_add(1, Ordering::Relaxed);
+                        match res {
+                            Ok(bytes) => info!("[{}/{}] {} SUCCESS: {} bytes", n, n_archives, archive.key, bytes.len()),
+                            Err(err) => error!("[{}/{}] {} ERR: {:?}", n, n_archives, archive.key, err),
+                        }
+                    }
                 });
             }
 
-            let mut i = 0;
-            while let Some(result) = set.join_next().await {
-                match result.unwrap() {
-                    Ok(bytes) => info!("[{}/{}] SUCCESS: {} bytes", i, num_archives, bytes.len()),
-                    Err(err) => error!("[{}/{}] ERR: {:?}", i, num_archives, err),
-                }
-                i += 1;
+            while let Some(_) = set.join_next().await {
             }
         },
         Commands::Save { out_path } => {

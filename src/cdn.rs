@@ -166,7 +166,7 @@ impl CDNFetcher {
         let archive_keys = cdn_config.get("archives").unwrap();
         let mut archive_index = Vec::new();
         for (i, archive_key) in archive_keys.iter().enumerate() {
-            info!("[{}/{}] fetching archive {}...", i, archive_keys.len(), archive_key);
+            info!("[{}/{}] fetching archive index {}...", i, archive_keys.len(), archive_key);
             let archive_data = cache.fetch_data(&hosts[0], "data", &format!("{}.index", archive_key)).await?;
             archive_index.push(ArchiveIndex::parse(archive_key, &archive_data)?);
         }
