@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ops::Range;
 
 use deku::{DekuRead, DekuContainerRead};
 
@@ -25,7 +26,7 @@ pub struct ArchiveIndexFooter {
 
 #[derive(Clone)]
 pub struct ArchiveIndex {
-    entries: HashMap<EKey, ArchiveIndexEntry>,
+    pub entries: HashMap<EKey, ArchiveIndexEntry>,
     pub key: String,
 }
 
@@ -36,6 +37,14 @@ pub struct ArchiveIndexEntry {
     pub size_bytes: u32,
     #[deku(endian = "big")]
     pub offset_bytes: u32,
+}
+
+impl ArchiveIndexEntry {
+    pub fn get_byte_range(&self) -> Range<usize> {
+        let start = self.offset_bytes as usize;
+        let end = start + self.size_bytes as usize;
+        start..end
+    }
 }
 
 impl ArchiveIndex {

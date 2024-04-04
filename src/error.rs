@@ -17,5 +17,7 @@ pub enum Error {
     #[error("Couldn't find file id {0}")]
     MissingFileId(u32),
     #[error("Couldn't find file with path {0}")]
-    MissingFilePath(String),
+    MissingFileName(String),
+    #[error("BLTE for file contains an encrypted frame, which we don't support")]
+    UnsupportedEncryptedData,
 }

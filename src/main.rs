@@ -1,10 +1,10 @@
-use std::{path::PathBuf, sync::{atomic::{AtomicUsize, Ordering}, Arc}};
+use std::{collections::HashSet, path::PathBuf, sync::{atomic::{AtomicUsize, Ordering}, Arc}};
 
 use clap::{arg, Parser, Subcommand};
 use log::{error, info};
-use polymorph::{cdn::CDNFetcher, error::Error};
+use polymorph::{cdn::CDNFetcher, error::Error, sheepfile::SheepfileReader};
 use axum::{extract::{Path, State}, http::StatusCode, routing::get, Router};
-use tokio::{sync::Mutex, task::JoinSet};
+use tokio::{fs, sync::Mutex, task::JoinSet};
 
 const PATCH_SERVER: &str = "http://us.patch.battle.net:1119";
 const PRODUCT: &str = "wow_classic";
@@ -14,7 +14,7 @@ const REGION: &str = "us";
 #[command(version, about, long_about = None)]
 struct Cli {
     #[arg(short, long, value_name = "FILE")]
-    cache_path: PathBuf,
+    sheepfile_path: PathBuf,
 
     #[command(subcommand)]
     command: Commands,
@@ -41,10 +41,10 @@ enum Commands {
         #[arg(short, long, value_name = "FILE")]
         out_path: PathBuf,
     },
-    Init,
-    Save {
+    List,
+    Create {
         #[arg(short, long, value_name = "FILE")]
-        out_path: PathBuf,
+        cache_path: PathBuf,
     },
 }
 
@@ -66,56 +66,37 @@ async fn get_file_name(state: State<ServerState>, Path(file_name): Path<String>)
 async fn main() -> Result<(), Error> {
     env_logger::init();
     let cli = Cli::parse();
-    let fetcher = CDNFetcher::init(cli.cache_path, PATCH_SERVER, PRODUCT, REGION).await?;
     match cli.command {
         Commands::Serve { port, no_fetch } => {
-            let state = ServerState { fetcher, no_fetch };
             let app = Router::new()
-                .with_state(state)
                 .route("/file-id/:file_id", get(get_file_id))
                 .route("/file-name/:file_name", get(get_file_name));
             // let listener = tokio::net::TcpListener::bind(&format!("0.0.0.0:{}", port)).await.unwrap();
             // axum::serve(listener, app).await.unwrap()
         },
         Commands::GetId { file_id, out_path } => {
-            let data = fetcher.fetch_file_id(file_id).await?;
-            tokio::fs::write(out_path, &data).await?;
+            let sheepfile = SheepfileReader::new(&cli.sheepfile_path).await?;
+            let entry = sheepfile.get_entry_for_file_id(file_id)
+                .ok_or(Error::MissingFileId(file_id))?;
+            let data = sheepfile.get_entry_data(&cli.sheepfile_path, entry).await?;
+            fs::write(out_path, &data).await?;
         },
         Commands::GetName { name, out_path } => {
-            let data = fetcher.fetch_file_name(&name).await?;
-            tokio::fs::write(out_path, &data).await?;
+            let sheepfile = SheepfileReader::new(&cli.sheepfile_path).await?;
+            let entry = sheepfile.get_entry_for_name(&name)
+                .ok_or(Error::MissingFileName(name))?;
+            let data = sheepfile.get_entry_data(&cli.sheepfile_path, entry).await?;
+            fs::write(out_path, &data).await?;
         },
-        Commands::Init => {
-            let arc_fetcher = Arc::new(fetcher);
-            let n_archives = arc_fetcher.archive_index.len();
-            info!("fetching {} archives...", n_archives);
-            let n_complete = Arc::new(AtomicUsize::new(0));
-            let mut set = JoinSet::new();
-            let mut archives = arc_fetcher.archive_index.clone();
-            for _ in 0..10 {
-                let fetcher_clone = arc_fetcher.clone();
-                let archives_batch = archives.split_off((n_archives / 10).min(archives.len()));
-                let n_complete_clone = n_complete.clone();
-                set.spawn(async move {
-                    for archive in archives_batch {
-                        let res = fetcher_clone.fetch_archive(&archive).await;
-                        let n = n_complete_clone.fetch_add(1, Ordering::Relaxed);
-                        match res {
-                            Ok(bytes) => info!("[{}/{}] {} SUCCESS: {} bytes", n, n_archives, archive.key, bytes.len()),
-                            Err(err) => error!("[{}/{}] {} ERR: {:?}", n, n_archives, archive.key, err),
-                        }
-                    }
-                });
-            }
-
-            while let Some(_) = set.join_next().await {
+        Commands::List => {
+            let sheepfile = SheepfileReader::new(cli.sheepfile_path).await?;
+            for (i, entry) in sheepfile.entries.iter().enumerate() {
+                println!("{} - FileID {}, Size {} bytes", i+1, entry.file_id, entry.size_bytes);
             }
         },
-        Commands::Save { out_path } => {
-            let db = fetcher.build_file_db();
-            let info = &db.file_infos[*db.file_id_to_file_info_index.get(&780788).unwrap()];
-            dbg!(info);
-            db.write_to_file(out_path).await?;
+        Commands::Create { cache_path } => {
+            let fetcher = CDNFetcher::init(cache_path, PATCH_SERVER, PRODUCT, REGION).await?;
+            fetcher.save_sheepfile(cli.sheepfile_path).await?;
         },
     }
     Ok(())

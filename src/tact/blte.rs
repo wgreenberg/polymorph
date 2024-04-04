@@ -37,6 +37,7 @@ pub fn decode_blte(buf: &[u8]) -> Result<Vec<u8>, Error> {
         match frame_type {
             'N' => out.extend(chunk_data),
             'Z' => out.extend(decompress_to_vec_zlib(chunk_data).map_err(Error::ZlibError)?),
+            'E' => return Err(Error::UnsupportedEncryptedData),
             c => panic!("{}", c),
         }
         data_offs += chunk.compressed_size as usize;

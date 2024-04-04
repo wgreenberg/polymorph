@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use deku::{DekuRead, DekuContainerRead};
 
 use crate::error::Error;
-use crate::tact::{btle::decode_blte, common::CKey};
+use crate::tact::{blte::decode_blte, common::CKey};
 
 
 #[derive(DekuRead, Clone)]
