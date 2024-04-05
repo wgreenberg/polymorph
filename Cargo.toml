@@ -4,11 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = ["sheepfile-reader", "sheepfile-writer", "tact", "cdn"]
 sheepfile-reader = []
-sheepfile-writer = []
-tact = []
-cdn = ["tact", "sheepfile-reader"]
+sheepfile-writer = ["tokio"]
+tact = ["miniz_oxide"]
+cdn = ["tact", "sheepfile-reader", "reqwest", "tokio"]
+default = ["cdn", "tact", "sheepfile-writer", "sheepfile-reader", "clap", "axum"]
 
 [lib]
 name = "polymorph"
@@ -17,15 +17,21 @@ path = "src/lib.rs"
 [[bin]]
 name = "tool"
 path = "src/main.rs"
+required-features = ["sheepfile-reader", "sheepfile-writer", "tact", "cdn", "clap", "axum"]
+
+[[bin]]
+name = "hashcrack"
+path = "src/hashcrack.rs"
+required-features = ["sheepfile-reader", "tokio"]
 
 [dependencies]
-axum = { version = "0.7.5" }
-clap = { version = "4.5.4", features = ["derive"] }
+axum = { version = "0.7.5", optional = true }
+clap = { version = "4.5.4", features = ["derive"], optional = true }
 deku = "0.16.0"
 env_logger = "0.11.3"
 hashers = "1.0.1"
 log = "0.4.21"
-miniz_oxide = "0.7.2"
-reqwest = "0.12.2"
+miniz_oxide = { version = "0.7.2", optional = true }
+reqwest = { version = "0.12.2", optional = true }
 thiserror = "1.0.58"
-tokio = { version = "1.37.0", features = ["full", "macros", "rt-multi-thread"] }
+tokio = { version = "1.37.0", features = ["full", "macros", "rt-multi-thread"], optional = true }

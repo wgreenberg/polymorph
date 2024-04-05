@@ -1,9 +1,9 @@
 use deku::DekuError;
-use miniz_oxide::inflate::DecompressError;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum Error {
+    #[cfg(feature = "reqwest")]
     #[error("Failed to make HTTP request")]
     HTTPRequestError(#[from] reqwest::Error),
     #[error("I/O error")]
@@ -12,8 +12,9 @@ pub enum Error {
     DekuError(#[from] DekuError),
     #[error("Missing CKey")]
     MissingCKey,
+    #[cfg(feature = "tact")]
     #[error("Invalid Zlib")]
-    ZlibError(DecompressError),
+    ZlibError(miniz_oxide::inflate::DecompressError),
     #[error("Couldn't find file id {0}")]
     MissingFileId(u32),
     #[error("Couldn't find file with path {0}")]

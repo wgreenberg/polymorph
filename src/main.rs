@@ -1,6 +1,6 @@
 use std::{io::SeekFrom, path::PathBuf};
 
-use clap::{arg, Parser, Subcommand};
+use clap::{arg, Args, Parser, Subcommand};
 use polymorph::{cdn::CDNFetcher, error::Error, sheepfile::{get_data_filename, Entry, INDEX_FILENAME}, sheepfile::reader::SheepfileReader};
 use axum::{extract::{Path, State}, http::StatusCode, routing::get, Router};
 use tokio::{fs, io::{AsyncReadExt, AsyncSeekExt}};
@@ -40,7 +40,6 @@ enum Commands {
         #[arg(short, long, value_name = "FILE")]
         out_path: PathBuf,
     },
-    List,
     Create {
         #[arg(short, long, value_name = "FILE")]
         cache_path: PathBuf,
@@ -92,20 +91,16 @@ async fn main() -> Result<(), Error> {
             let entry = sheepfile.get_entry_for_file_id(file_id)
                 .ok_or(Error::MissingFileId(file_id))?;
             let data = get_entry_data(&cli.sheepfile_path, entry).await?;
-            fs::write(out_path, &data).await?;
+            fs::write(&out_path, &data).await?;
+            println!("Found {} (name hash {}), wrote {} bytes to {:?}", entry.file_id, entry.name_hash, data.len(), &out_path);
         },
         Commands::GetName { name, out_path } => {
             let sheepfile = new_sheepfile(&cli.sheepfile_path).await?;
             let entry = sheepfile.get_entry_for_name(&name)
                 .ok_or(Error::MissingFileName(name))?;
             let data = get_entry_data(&cli.sheepfile_path, entry).await?;
-            fs::write(out_path, &data).await?;
-        },
-        Commands::List => {
-            let sheepfile = new_sheepfile(cli.sheepfile_path).await?;
-            for (i, entry) in sheepfile.entries.iter().enumerate() {
-                println!("{} - FileID {}, Size {} bytes", i+1, entry.file_id, entry.size_bytes);
-            }
+            fs::write(&out_path, &data).await?;
+            println!("Found {} (name hash {}), wrote {} bytes to {:?}", entry.file_id, entry.name_hash, data.len(), &out_path);
         },
         Commands::Create { cache_path } => {
             let fetcher = CDNFetcher::init(cache_path, PATCH_SERVER, PRODUCT, REGION).await?;

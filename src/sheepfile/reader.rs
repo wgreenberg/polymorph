@@ -34,7 +34,12 @@ impl SheepfileReader {
 
     pub fn get_entry_for_name(&self, name: &str) -> Option<&Entry> {
         let normalized = name.to_ascii_uppercase().replace("/", "\\");
-        let name_hash = hashers::jenkins::lookup3(normalized.as_bytes());
+        let mut name_hash = hashers::jenkins::lookup3(normalized.as_bytes());
+        // unsure if our lookup3 is bugged or what, but the high and low values
+        // are swapped
+        let high = name_hash & 0xffffffff00000000;
+        let low = name_hash & 0x00000000ffffffff;
+        name_hash = high >> 32 | low << 32;
         let index = *self.name_hash_to_entry_index.get(&name_hash)?;
         Some(&self.entries[index])
     }
