@@ -30,7 +30,7 @@ pub struct ArchiveIndex {
     pub key: String,
 }
 
-#[derive(DekuRead, Clone)]
+#[derive(DekuRead, Clone, Debug)]
 pub struct ArchiveIndexEntry {
     pub ekey: EKey,
     #[deku(endian = "big")]

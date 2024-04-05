@@ -1,4 +1,4 @@
-use std::{os::windows::fs::MetadataExt, path::{Path, PathBuf}};
+use std::path::{Path, PathBuf};
 
 use deku::DekuContainerWrite;
 use tokio::{fs::{self, File}, io::AsyncWriteExt};
@@ -11,6 +11,7 @@ pub struct SheepfileWriter {
     pub path: PathBuf,
     current_data_index: usize,
     current_data_file: File,
+    current_data_file_size: usize,
     entries: Vec<Entry>,
 }
 
@@ -21,25 +22,25 @@ impl SheepfileWriter {
         Ok(SheepfileWriter {
             path: path.as_ref().to_path_buf(),
             current_data_index: 0,
+            current_data_file_size: 0,
             current_data_file,
             entries: Vec::new(),
         })
     }
 
     pub async fn append_entry(&mut self, file_id: u32, name_hash: u64, data: &[u8]) -> Result<(), Error> {
-        let mut file_size = self.current_data_file.metadata().await?.file_size();
-        if data.len() + file_size as usize > MAX_DATA_FILE_SIZE_BYTES {
+        if data.len() + self.current_data_file_size > MAX_DATA_FILE_SIZE_BYTES {
             self.new_data_file().await?;
-            file_size = 0;
         }
         self.entries.push(Entry {
             file_id,
             name_hash,
             data_file_index: self.current_data_index as u16,
-            start_bytes: file_size as u32,
+            start_bytes: self.current_data_file_size as u32,
             size_bytes: data.len() as u32,
         });
         self.current_data_file.write_all(&data).await?;
+        self.current_data_file_size += data.len();
         Ok(())
     }
 
@@ -55,6 +56,7 @@ impl SheepfileWriter {
 
     async fn new_data_file(&mut self) -> Result<(), Error> {
         self.current_data_index += 1;
+        self.current_data_file_size = 0;
         let path = self.path.join(get_data_filename(self.current_data_index));
         self.current_data_file = fs::File::create(path).await?;
         Ok(())

@@ -6,7 +6,7 @@ use crate::error::Error;
 use crate::tact::common::CKey;
 use crate::tact::blte::decode_blte;
 
-#[derive(DekuRead, Clone)]
+#[derive(DekuRead, Clone, Debug)]
 pub struct RootFileEntry {
     pub ckey: CKey,
     #[deku(endian = "little")]

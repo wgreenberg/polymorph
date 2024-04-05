@@ -67,6 +67,26 @@ async fn read_or_cache<P: AsRef<Path>>(client: &Client, file_path: P, url: &str)
     }
 }
 
+async fn find_matching_segment_in_dir<P: AsRef<Path>>(dir_path: P, Range { start, end }: Range<usize>) -> Result<Option<Vec<u8>>, Error> {
+    let mut dir_list = fs::read_dir(dir_path.as_ref()).await?;
+    debug!("looking for segment in {:?} matching {}-{}", dir_path.as_ref(), start, end);
+    while let Some(dir_entry) = dir_list.next_entry().await? {
+        let name = dir_entry.file_name().into_string().unwrap();
+        let (start_str, end_str) = name.split_once("_").expect("invalid filename in segments dir");
+        let file_start: usize = start_str.parse().expect("invalid filename in segments dir");
+        let file_end: usize = end_str.parse().expect("invalid filename in segments dir");
+        if file_start <= start && file_end >= end {
+            debug!("found matching segment {:?}", &name);
+            let mut file = fs::File::open(dir_entry.path()).await?;
+            file.seek(SeekFrom::Start((start - file_start) as u64)).await?;
+            let mut buf = vec![0; end - start];
+            file.read_exact(&mut buf).await?;
+            return Ok(Some(buf))
+        }
+    }
+    Ok(None)
+}
+
 async fn read_or_cache_segment<P: AsRef<Path>>(client: &Client, file_path: P, url: &str, Range { start, end }: Range<usize>) -> Result<Vec<u8>, Error> {
     if matches!(fs::try_exists(file_path.as_ref()).await, Ok(true)) {
         debug!("cache: found {:?}", file_path.as_ref());
@@ -79,25 +99,21 @@ async fn read_or_cache_segment<P: AsRef<Path>>(client: &Client, file_path: P, ur
 
     let mut segment_path = file_path.as_ref().to_path_buf();
     segment_path.set_extension(".segments");
-    segment_path.push(format!("{}_{}", start, end));
-    match fs::try_exists(&segment_path).await {
-        Ok(true) => {
-            debug!("cache: found {:?}", segment_path);
-            Ok(fs::read(segment_path).await?)
-        },
-        _ => {
-            debug!("cache: didn't find {:?}, requesting {}", segment_path, &url);
-            let req = client.get(url)
-                .header(RANGE, format!("bytes={}-{}", start, end));
-            let buf = req.send()
-                .await?
-                .bytes()
-                .await?;
-            fs::create_dir_all(segment_path.parent().unwrap())
-                .await?;
-            fs::write(segment_path, &buf).await?;
-            Ok(buf.to_vec())
-        },
+
+    if let Some(data) = find_matching_segment_in_dir(&segment_path, Range { start, end }).await? {
+        Ok(data)
+    } else {
+        debug!("cache: didn't find {:?}, requesting {}", segment_path, &url);
+        let req = client.get(url)
+            .header(RANGE, format!("bytes={}-{}", start, end));
+        let buf = req.send()
+            .await?
+            .bytes()
+            .await?;
+        fs::create_dir_all(segment_path.parent().unwrap())
+            .await?;
+        fs::write(segment_path, &buf).await?;
+        Ok(buf.to_vec())
     }
 }
 
@@ -233,7 +249,7 @@ impl CDNFetcher {
     }
 
     pub async fn save_sheepfile<P: AsRef<Path>>(&self, path: P) -> Result<(), Error> {
-        let mut archive_to_entries: HashMap<&str, (&ArchiveIndex, Vec<(u32, u64, &ArchiveIndexEntry)>)> = HashMap::new();
+        let mut archive_to_entries: HashMap<&str, (&ArchiveIndex, Vec<(u32, u64, &ArchiveIndexEntry, &ArchiveIndex)>)> = HashMap::new();
         for (&file_id, &index) in self.root.file_id_to_entry_index.iter() {
             let root_entry = &self.root.entries[index];
             let Some(ekey) = self.encoding.get_ekey_for_ckey(&root_entry.ckey) else {
@@ -245,29 +261,34 @@ impl CDNFetcher {
                 continue;
             };
             let (_, entries) = archive_to_entries.entry(&archive.key).or_insert((archive, Vec::new()));
-            entries.push((file_id, root_entry.name_hash, archive_entry));
+            entries.push((file_id, root_entry.name_hash, archive_entry, &archive));
         }
 
-        info!("creating sheepfile at {:?}", path.as_ref());
-        let mut sheepfile = SheepfileWriter::new(path).await?;
+        let mut archive_to_range: HashMap<&str, Range<usize>> = HashMap::new();
+        let mut all_entries: Vec<(u32, u64, &ArchiveIndexEntry, &ArchiveIndex)> = Vec::new();
         let n_archives = archive_to_entries.len();
         for (i, (archive, entries)) in archive_to_entries.values().enumerate() {
             let index_entries: Vec<&ArchiveIndexEntry> = entries.iter().map(|entry| entry.2).collect();
             info!("[{}/{}] fetching archive {} (contains {} entries)...", i, n_archives, &archive.key, index_entries.len());
             let (offset, data) = self.cache.fetch_archive_entries(&self.hosts[0], archive, index_entries.as_slice()).await?;
-            for (file_id, name_hash, archive_entry) in entries {
-                let start = archive_entry.offset_bytes as usize - offset;
-                let end = start + archive_entry.size_bytes as usize;
-                match decode_blte(&data[start..end]) {
-                    Ok(uncompressed_data) => {
-                        sheepfile.append_entry(*file_id, *name_hash, &uncompressed_data).await?;
-                    },
-                    Err(Error::UnsupportedEncryptedData) => {
-                        info!("file {} contains encrypted data, skipping", file_id);
-                        continue;
-                    },
-                    Err(e) => return Err(e),
-                }
+            archive_to_range.insert(&archive.key, offset..data.len() + offset);
+            all_entries.extend(entries);
+        }
+
+        info!("creating sheepfile at {:?}", path.as_ref());
+        all_entries.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut sheepfile = SheepfileWriter::new(path).await?;
+        for (file_id, name_hash, archive_entry, archive) in all_entries {
+            let data = self.cache.fetch_archive_entry(&self.hosts[0], archive, archive_entry).await?;
+            match decode_blte(&data) {
+                Ok(uncompressed_data) => {
+                    sheepfile.append_entry(file_id, name_hash, &uncompressed_data).await?;
+                },
+                Err(Error::UnsupportedEncryptedData) => {
+                    info!("file {} contains encrypted data, skipping", file_id);
+                    continue;
+                },
+                Err(e) => return Err(e),
             }
         }
 

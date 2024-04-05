@@ -26,7 +26,7 @@ async fn main() -> Result<(), Error> {
     // let file_id = 780788;
     // let name = "XTextures\\ocean\\ocean_h.1.blp";
     // let file_id = 219855;
-    let name = "WORLD\\AZEROTH\\REDRIDGE\\PASSIVEDOODADS\\DOCKPIECES\\REDRIDGEDOCKPLANK02";
+    let name = "WORLD\\AZEROTH\\REDRIDGE\\PASSIVEDOODADS\\DOCKPIECES\\REDRIDGEDOCKPLANK02.BLP";
     let file_id = 190086;
     let sheepfile = SheepfileReader::parse(&tokio::fs::read(path).await?)?;
     let Some(entry) = sheepfile.get_entry_for_file_id(file_id) else {
