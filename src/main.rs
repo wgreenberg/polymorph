@@ -1,11 +1,11 @@
 use std::{io::SeekFrom, path::PathBuf};
 
 use clap::{arg, Parser, Subcommand};
-use polymorph::{cdn::CDNFetcher, error::Error, sheepfile::{get_data_filename, Entry, INDEX_FILENAME}, sheepfile::reader::SheepfileReader};
+use log::info;
+use polymorph::{cdn::CDNFetcher, error::Error, sheepfile::{get_data_filename, reader::SheepfileReader, writer::SheepfileWriter, Entry, INDEX_FILENAME}};
 use tokio::{fs, io::{AsyncReadExt, AsyncSeekExt}};
 
 const PATCH_SERVER: &str = "http://us.patch.battle.net:1119";
-const PRODUCT: &str = "wow_classic";
 const REGION: &str = "us";
 
 #[derive(Parser, Debug)]
@@ -80,8 +80,14 @@ async fn main() -> Result<(), Error> {
             println!("Found {} (name hash {}), wrote {} bytes to {:?}", entry.file_id, entry.name_hash, data.len(), &out_path);
         },
         Commands::Create { cache_path } => {
-            let fetcher = CDNFetcher::init(cache_path, PATCH_SERVER, PRODUCT, REGION).await?;
-            fetcher.save_sheepfile(cli.sheepfile_path).await?;
+            info!("creating wow_classic CDNFetcher...");
+            let mut classic_fetcher = CDNFetcher::init(&cache_path, PATCH_SERVER, "wow_classic", REGION).await?;
+            info!("creating wow_classic_era CDNFetcher...");
+            let mut era_fetcher = CDNFetcher::init(&cache_path, PATCH_SERVER, "wow_classic_era", REGION).await?;
+            info!("creating sheepfile at {:?}", &cli.sheepfile_path);
+            let sheepfile = SheepfileWriter::new(cli.sheepfile_path).await?;
+            info!("writing sheepfile contents from fetchers...");
+            sheepfile.write_cdn_files(&[&mut classic_fetcher, &mut era_fetcher]).await?;
         },
     }
     Ok(())

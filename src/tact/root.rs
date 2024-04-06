@@ -36,7 +36,6 @@ pub struct RootFile {
 
 impl RootFile {
     pub fn parse(data: &[u8]) -> Result<Self, Error> {
-
         let decode = decode_blte(data)?;
 
         let mut entries = Vec::new();

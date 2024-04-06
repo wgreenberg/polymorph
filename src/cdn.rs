@@ -4,14 +4,13 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::io::SeekFrom;
 
-use log::{debug, error, info};
+use log::{debug, info};
 use reqwest::header::RANGE;
 use reqwest::Client;
 use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 use crate::error::Error;
-use crate::sheepfile::writer::SheepfileWriter;
 use crate::tact::archive::{ArchiveIndex, ArchiveIndexEntry};
 use crate::tact::blte::decode_blte;
 use crate::tact::common::{CKey, EKey};
@@ -71,7 +70,7 @@ async fn find_matching_segment_in_dir<P: AsRef<Path>>(dir_path: P, Range { start
     let Ok(mut dir_list) = fs::read_dir(dir_path.as_ref()).await else {
         return Ok(None);
     };
-    debug!("looking for segment in {:?} matching {}-{}", dir_path.as_ref(), start, end);
+    debug!("looking for segment in {:?} matching {}_{}", dir_path.as_ref(), start, end);
     while let Some(dir_entry) = dir_list.next_entry().await? {
         let name = dir_entry.file_name().into_string().unwrap();
         let (start_str, end_str) = name.split_once("_").expect("invalid filename in segments dir");
@@ -100,7 +99,7 @@ async fn read_or_cache_segment<P: AsRef<Path>>(client: &Client, file_path: P, ur
     }
 
     let mut segment_path = file_path.as_ref().to_path_buf();
-    segment_path.set_extension(".segments");
+    segment_path.set_extension("segments");
 
     if let Some(data) = find_matching_segment_in_dir(&segment_path, Range { start, end }).await? {
         Ok(data)
@@ -112,9 +111,13 @@ async fn read_or_cache_segment<P: AsRef<Path>>(client: &Client, file_path: P, ur
             .await?
             .bytes()
             .await?;
+        segment_path.push(format!("{}_{}", start, end));
+        debug!("creating dir {:?}", segment_path.parent());
         fs::create_dir_all(segment_path.parent().unwrap())
             .await?;
+        debug!("writing {:?}", &segment_path);
         fs::write(segment_path, &buf).await?;
+        debug!("done!");
         Ok(buf.to_vec())
     }
 }
@@ -248,54 +251,6 @@ impl CDNFetcher {
             cdn_config,
             build_config,
         })
-    }
-
-    pub async fn save_sheepfile<P: AsRef<Path>>(&self, path: P) -> Result<(), Error> {
-        let mut archive_to_entries: HashMap<&str, (&ArchiveIndex, Vec<(u32, u64, &ArchiveIndexEntry, &ArchiveIndex)>)> = HashMap::new();
-        for (&file_id, &index) in self.root.file_id_to_entry_index.iter() {
-            let root_entry = &self.root.entries[index];
-            let Some(ekey) = self.encoding.get_ekey_for_ckey(&root_entry.ckey) else {
-                error!("skipping file id {}, couldn't find ekey", file_id);
-                continue;
-            };
-            let Some((archive, archive_entry)) = self.find_archive_entry(ekey) else {
-                error!("skipping file id {}, couldn't find archive entry", file_id);
-                continue;
-            };
-            let (_, entries) = archive_to_entries.entry(&archive.key).or_insert((archive, Vec::new()));
-            entries.push((file_id, root_entry.name_hash, archive_entry, &archive));
-        }
-
-        let mut archive_to_range: HashMap<&str, Range<usize>> = HashMap::new();
-        let mut all_entries: Vec<(u32, u64, &ArchiveIndexEntry, &ArchiveIndex)> = Vec::new();
-        let n_archives = archive_to_entries.len();
-        for (i, (archive, entries)) in archive_to_entries.values().enumerate() {
-            let index_entries: Vec<&ArchiveIndexEntry> = entries.iter().map(|entry| entry.2).collect();
-            info!("[{}/{}] fetching archive {} (contains {} entries)...", i, n_archives, &archive.key, index_entries.len());
-            let (offset, data) = self.cache.fetch_archive_entries(&self.hosts[0], archive, index_entries.as_slice()).await?;
-            archive_to_range.insert(&archive.key, offset..data.len() + offset);
-            all_entries.extend(entries);
-        }
-
-        info!("creating sheepfile at {:?}", path.as_ref());
-        all_entries.sort_by(|a, b| a.0.cmp(&b.0));
-        let mut sheepfile = SheepfileWriter::new(path).await?;
-        for (file_id, name_hash, archive_entry, archive) in all_entries {
-            let data = self.cache.fetch_archive_entry(&self.hosts[0], archive, archive_entry).await?;
-            match decode_blte(&data) {
-                Ok(uncompressed_data) => {
-                    sheepfile.append_entry(file_id, name_hash, &uncompressed_data).await?;
-                },
-                Err(Error::UnsupportedEncryptedData) => {
-                    info!("file {} contains encrypted data, skipping", file_id);
-                    continue;
-                },
-                Err(e) => return Err(e),
-            }
-        }
-
-        sheepfile.finish().await?;
-        Ok(())
     }
 
     pub fn find_archive_entry(&self, ekey: &EKey) -> Option<(&ArchiveIndex, &ArchiveIndexEntry)> {

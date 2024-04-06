@@ -1,9 +1,10 @@
-use std::path::{Path, PathBuf};
+use std::{collections::{HashMap, HashSet}, path::{Path, PathBuf}};
 
 use deku::DekuContainerWrite;
+use log::{error, info};
 use tokio::{fs::{self, File}, io::AsyncWriteExt};
 
-use crate::{error::Error, sheepfile::{get_data_filename, Entry, Index, INDEX_FILENAME}};
+use crate::{cdn::CDNFetcher, error::Error, sheepfile::{get_data_filename, Entry, Index, INDEX_FILENAME}, tact::{archive::{ArchiveIndex, ArchiveIndexEntry}, blte::decode_blte}};
 
 const MAX_DATA_FILE_SIZE_BYTES: usize = 256000000;
 
@@ -26,6 +27,55 @@ impl SheepfileWriter {
             current_data_file,
             entries: Vec::new(),
         })
+    }
+
+    pub async fn write_cdn_files(mut self, cdns: &[&mut CDNFetcher]) -> Result<(), Error> {
+        let mut all_entries: Vec<(u32, u64, &ArchiveIndexEntry, &ArchiveIndex, &&mut CDNFetcher)> = Vec::new();
+        let mut all_file_ids = HashSet::new();
+        for cdn in cdns {
+            let mut archive_to_entries: HashMap<&str, (&ArchiveIndex, Vec<(u32, u64, &ArchiveIndexEntry, &ArchiveIndex, &&mut CDNFetcher)>)> = HashMap::new();
+            for (&file_id, &index) in cdn.root.file_id_to_entry_index.iter() {
+                if all_file_ids.contains(&file_id) {
+                    continue;
+                }
+                let root_entry = &cdn.root.entries[index];
+                let Some(ekey) = cdn.encoding.get_ekey_for_ckey(&root_entry.ckey) else {
+                    error!("skipping file id {}, couldn't find ekey", file_id);
+                    continue;
+                };
+                let Some((archive, archive_entry)) = cdn.find_archive_entry(ekey) else {
+                    error!("skipping file id {}, couldn't find archive entry", file_id);
+                    continue;
+                };
+                let (_, entries) = archive_to_entries.entry(&archive.key).or_insert((archive, Vec::new()));
+                entries.push((file_id, root_entry.name_hash, archive_entry, &archive, cdn));
+                all_file_ids.insert(file_id);
+            }
+
+            let n_archives = archive_to_entries.len();
+            for (i, (archive, entries)) in archive_to_entries.into_values().enumerate() {
+                let index_entries: Vec<&ArchiveIndexEntry> = entries.iter().map(|entry| entry.2).collect();
+                info!("[{}/{}] fetching archive {} (contains {} entries)...", i, n_archives, &archive.key, index_entries.len());
+                let _ = cdn.cache.fetch_archive_entries(&cdn.hosts[0], archive, index_entries.as_slice()).await?;
+                all_entries.extend(entries);
+            }
+        }
+
+        info!("writing {} fileIDs to sheepfile...", all_entries.len());
+        all_entries.sort_by(|a, b| a.0.cmp(&b.0));
+        for (file_id, name_hash, archive_entry, archive, cdn) in all_entries {
+            let data = cdn.cache.fetch_archive_entry(&cdn.hosts[0], archive, archive_entry).await?;
+            match decode_blte(&data) {
+                Ok(uncompressed_data) => self.append_entry(file_id, name_hash, &uncompressed_data).await?,
+                Err(Error::UnsupportedEncryptedData) => {
+                    info!("file {} contains encrypted data, skipping", file_id);
+                    continue;
+                },
+                Err(e) => return Err(e),
+            }
+        }
+
+        self.finish().await
     }
 
     pub async fn append_entry(&mut self, file_id: u32, name_hash: u64, data: &[u8]) -> Result<(), Error> {

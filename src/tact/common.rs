@@ -12,7 +12,7 @@ macro_rules! impl_key {
                 let mut result = String::new();
                 let $name(hex) = self;
                 for b in hex {
-                    result.push_str(&format!("{:x}", b));
+                    result.push_str(&format!("{:02x}", b));
                 }
                 result
             }
