@@ -68,7 +68,9 @@ async fn read_or_cache<P: AsRef<Path>>(client: &Client, file_path: P, url: &str)
 }
 
 async fn find_matching_segment_in_dir<P: AsRef<Path>>(dir_path: P, Range { start, end }: Range<usize>) -> Result<Option<Vec<u8>>, Error> {
-    let mut dir_list = fs::read_dir(dir_path.as_ref()).await?;
+    let Ok(mut dir_list) = fs::read_dir(dir_path.as_ref()).await else {
+        return Ok(None);
+    };
     debug!("looking for segment in {:?} matching {}-{}", dir_path.as_ref(), start, end);
     while let Some(dir_entry) = dir_list.next_entry().await? {
         let name = dir_entry.file_name().into_string().unwrap();
