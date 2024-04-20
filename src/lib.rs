@@ -4,3 +4,4 @@ pub mod tact;
 #[cfg(feature = "cdn")]
 pub mod cdn;
 pub mod sheepfile;
+pub mod vlq;
