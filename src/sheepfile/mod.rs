@@ -1,5 +1,5 @@
 
-use deku::{DekuContainerWrite, DekuRead, DekuUpdate, DekuWrite};
+use deku::{DekuRead, DekuWrite};
 
 #[cfg(feature = "sheepfile-reader")]
 pub mod reader;
